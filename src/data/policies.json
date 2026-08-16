@@ -1,0 +1,264 @@
+{
+  "policies": [
+    {
+      "policy_id": "POL10001",
+      "customer_id": "CUS10001",
+      "policy_type": "Comprehensive",
+      "status": "ACTIVE",
+      "start_date": "2025-10-01",
+      "expiry_date": "2026-09-30",
+      "insurer": "ABC Insurance",
+      "vehicle": {
+        "make": "Hyundai",
+        "model": "Creta",
+        "variant": "SX Petrol",
+        "registration": "MH01AB1234",
+        "year": 2023
+      },
+      "coverage": {
+        "accidental_damage": true,
+        "third_party_damage": true,
+        "theft": true,
+        "natural_calamity": true,
+        "personal_accident": true
+      },
+      "deductible_inr": 2000,
+      "insured_declared_value_inr": 1150000,
+      "roadside_assistance": true
+    },
+    {
+      "policy_id": "POL10002",
+      "customer_id": "CUS10002",
+      "policy_type": "Comprehensive",
+      "status": "ACTIVE",
+      "start_date": "2026-01-15",
+      "expiry_date": "2027-01-14",
+      "insurer": "ABC Insurance",
+      "vehicle": {
+        "make": "Maruti Suzuki",
+        "model": "Brezza",
+        "variant": "ZXI",
+        "registration": "DL08CA4521",
+        "year": 2022
+      },
+      "coverage": {
+        "accidental_damage": true,
+        "third_party_damage": true,
+        "theft": true,
+        "natural_calamity": true,
+        "personal_accident": true
+      },
+      "deductible_inr": 1500,
+      "insured_declared_value_inr": 820000,
+      "roadside_assistance": true
+    },
+    {
+      "policy_id": "POL10003",
+      "customer_id": "CUS10003",
+      "policy_type": "Own Damage",
+      "status": "ACTIVE",
+      "start_date": "2026-06-01",
+      "expiry_date": "2027-05-31",
+      "insurer": "ABC Insurance",
+      "vehicle": {
+        "make": "Tata",
+        "model": "Nexon",
+        "variant": "XZ Plus",
+        "registration": "MH12KP7821",
+        "year": 2024
+      },
+      "coverage": {
+        "accidental_damage": true,
+        "third_party_damage": false,
+        "theft": true,
+        "natural_calamity": true,
+        "personal_accident": true
+      },
+      "deductible_inr": 2000,
+      "insured_declared_value_inr": 1010000,
+      "roadside_assistance": true
+    },
+    {
+      "policy_id": "POL10004",
+      "customer_id": "CUS10004",
+      "policy_type": "Comprehensive",
+      "status": "ACTIVE",
+      "start_date": "2026-04-01",
+      "expiry_date": "2027-03-31",
+      "insurer": "ABC Insurance",
+      "vehicle": {
+        "make": "Kia",
+        "model": "Seltos",
+        "variant": "HTX Diesel",
+        "registration": "TS09EF3245",
+        "year": 2023
+      },
+      "coverage": {
+        "accidental_damage": true,
+        "third_party_damage": true,
+        "theft": true,
+        "natural_calamity": true,
+        "personal_accident": true
+      },
+      "deductible_inr": 2500,
+      "insured_declared_value_inr": 1240000,
+      "roadside_assistance": true
+    },
+    {
+      "policy_id": "POL10005",
+      "customer_id": "CUS10005",
+      "policy_type": "Third Party",
+      "status": "ACTIVE",
+      "start_date": "2026-02-01",
+      "expiry_date": "2027-01-31",
+      "insurer": "ABC Insurance",
+      "vehicle": {
+        "make": "Honda",
+        "model": "City",
+        "variant": "VX CVT",
+        "registration": "UP32AB9182",
+        "year": 2021
+      },
+      "coverage": {
+        "accidental_damage": false,
+        "third_party_damage": true,
+        "theft": false,
+        "natural_calamity": false,
+        "personal_accident": true
+      },
+      "deductible_inr": 0,
+      "insured_declared_value_inr": 650000,
+      "roadside_assistance": false
+    },
+    {
+      "policy_id": "POL10006",
+      "customer_id": "CUS10006",
+      "policy_type": "Comprehensive",
+      "status": "ACTIVE",
+      "start_date": "2025-11-10",
+      "expiry_date": "2026-11-09",
+      "insurer": "ABC Insurance",
+      "vehicle": {
+        "make": "Hyundai",
+        "model": "i20",
+        "variant": "Asta",
+        "registration": "KA05MN4523",
+        "year": 2022
+      },
+      "coverage": {
+        "accidental_damage": true,
+        "third_party_damage": true,
+        "theft": true,
+        "natural_calamity": true,
+        "personal_accident": true
+      },
+      "deductible_inr": 1500,
+      "insured_declared_value_inr": 710000,
+      "roadside_assistance": true
+    },
+    {
+      "policy_id": "POL10007",
+      "customer_id": "CUS10007",
+      "policy_type": "Comprehensive",
+      "status": "EXPIRED",
+      "start_date": "2025-08-01",
+      "expiry_date": "2026-07-31",
+      "insurer": "ABC Insurance",
+      "vehicle": {
+        "make": "Mahindra",
+        "model": "XUV700",
+        "variant": "AX7",
+        "registration": "RJ14CD7821",
+        "year": 2023
+      },
+      "coverage": {
+        "accidental_damage": true,
+        "third_party_damage": true,
+        "theft": true,
+        "natural_calamity": true,
+        "personal_accident": true
+      },
+      "deductible_inr": 2500,
+      "insured_declared_value_inr": 1580000,
+      "roadside_assistance": true
+    },
+    {
+      "policy_id": "POL10008",
+      "customer_id": "CUS10008",
+      "policy_type": "Comprehensive",
+      "status": "ACTIVE",
+      "start_date": "2026-03-20",
+      "expiry_date": "2027-03-19",
+      "insurer": "ABC Insurance",
+      "vehicle": {
+        "make": "Toyota",
+        "model": "Glanza",
+        "variant": "V",
+        "registration": "TN10GH5432",
+        "year": 2022
+      },
+      "coverage": {
+        "accidental_damage": true,
+        "third_party_damage": true,
+        "theft": true,
+        "natural_calamity": true,
+        "personal_accident": true
+      },
+      "deductible_inr": 1500,
+      "insured_declared_value_inr": 780000,
+      "roadside_assistance": true
+    },
+    {
+      "policy_id": "POL10009",
+      "customer_id": "CUS10009",
+      "policy_type": "Comprehensive",
+      "status": "ACTIVE",
+      "start_date": "2026-05-05",
+      "expiry_date": "2027-05-04",
+      "insurer": "ABC Insurance",
+      "vehicle": {
+        "make": "Tata",
+        "model": "Harrier",
+        "variant": "XZ Plus",
+        "registration": "GJ01KL8821",
+        "year": 2024
+      },
+      "coverage": {
+        "accidental_damage": true,
+        "third_party_damage": true,
+        "theft": true,
+        "natural_calamity": true,
+        "personal_accident": true
+      },
+      "deductible_inr": 2500,
+      "insured_declared_value_inr": 1420000,
+      "roadside_assistance": true
+    },
+    {
+      "policy_id": "POL10010",
+      "customer_id": "CUS10010",
+      "policy_type": "Comprehensive",
+      "status": "ACTIVE",
+      "start_date": "2026-02-12",
+      "expiry_date": "2027-02-11",
+      "insurer": "ABC Insurance",
+      "vehicle": {
+        "make": "MG",
+        "model": "Astor",
+        "variant": "Sharp",
+        "registration": "CH01PQ6723",
+        "year": 2023
+      },
+      "coverage": {
+        "accidental_damage": true,
+        "third_party_damage": true,
+        "theft": true,
+        "natural_calamity": true,
+        "personal_accident": true
+      },
+      "deductible_inr": 2000,
+      "insured_declared_value_inr": 960000,
+      "roadside_assistance": true
+    }
+  ]
+}

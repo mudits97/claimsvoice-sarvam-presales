@@ -1,0 +1,52 @@
+{
+  "claims": [
+    {
+      "claim_id": "CLM2026000001",
+      "customer_id": "CUS10009",
+      "policy_id": "POL10009",
+      "status": "HUMAN_REVIEW",
+      "incident": {
+        "date": "2026-08-16",
+        "time": "22:00",
+        "location": "the position to be driven",
+        "incident_type": "accident",
+        "vehicle_damage": "not specified",
+        "third_party_involved": false,
+        "injury_reported": true,
+        "vehicle_drivable": false
+      },
+      "coverage_type": "accidental_damage",
+      "created_at": "2026-08-17T00:02:40",
+      "next_action": "Claims specialist review",
+      "escalation": {
+        "reason": "Third-party injury reported",
+        "priority": "HIGH",
+        "queue": "Claims Specialist"
+      }
+    },
+    {
+      "claim_id": "CLM2026000002",
+      "customer_id": "CUS10009",
+      "policy_id": "POL10009",
+      "status": "HUMAN_REVIEW",
+      "incident": {
+        "date": "2026-08-16",
+        "time": "22:00",
+        "location": "the position to be driven",
+        "incident_type": "accident",
+        "vehicle_damage": "not specified",
+        "third_party_involved": false,
+        "injury_reported": true,
+        "vehicle_drivable": false
+      },
+      "coverage_type": "accidental_damage",
+      "created_at": "2026-08-17T00:03:39",
+      "next_action": "Claims specialist review",
+      "escalation": {
+        "reason": "Third-party injury reported",
+        "priority": "HIGH",
+        "queue": "Claims Specialist"
+      }
+    }
+  ]
+}

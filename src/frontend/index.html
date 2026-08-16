@@ -1,0 +1,1697 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ClaimsVoice</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f7f8fc;
+        --panel: #ffffff;
+        --panel-soft: #fbfcff;
+        --ink: #111827;
+        --muted: #65708a;
+        --line: #e3e7f0;
+        --purple: #5b38d8;
+        --purple-2: #7b5cff;
+        --purple-soft: #f0ebff;
+        --green: #2faf62;
+        --green-soft: #eaf8ef;
+        --amber: #b7791f;
+        --amber-soft: #fff7e6;
+        --red: #d14343;
+        --red-soft: #fff0f0;
+        --shadow: 0 18px 50px rgba(24, 32, 56, 0.08);
+        --radius: 8px;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at top left, rgba(91, 56, 216, 0.07), transparent 28rem),
+          var(--bg);
+        color: var(--ink);
+      }
+
+      button,
+      input,
+      textarea {
+        font: inherit;
+      }
+
+      button {
+        border: 0;
+        cursor: pointer;
+      }
+
+      button:focus-visible,
+      input:focus-visible,
+      textarea:focus-visible {
+        outline: 3px solid rgba(91, 56, 216, 0.28);
+        outline-offset: 2px;
+      }
+
+      .app {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .topbar {
+        height: 86px;
+        background: rgba(255, 255, 255, 0.86);
+        border-bottom: 1px solid var(--line);
+        backdrop-filter: blur(18px);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 32px;
+        gap: 24px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        min-width: 240px;
+      }
+
+      .brand-mark {
+        width: 44px;
+        height: 52px;
+        border-radius: 18px 18px 22px 22px;
+        background: linear-gradient(160deg, #6f55f5, #3f2aa7);
+        color: #fff;
+        display: grid;
+        place-items: center;
+        box-shadow: 0 10px 28px rgba(91, 56, 216, 0.25);
+        position: relative;
+      }
+
+      .brand-mark::before {
+        content: "";
+        width: 20px;
+        height: 18px;
+        background:
+          linear-gradient(#fff, #fff) 2px 6px / 2px 8px no-repeat,
+          linear-gradient(#fff, #fff) 7px 3px / 2px 14px no-repeat,
+          linear-gradient(#fff, #fff) 12px 8px / 2px 6px no-repeat,
+          linear-gradient(#fff, #fff) 17px 5px / 2px 10px no-repeat;
+        opacity: 0.92;
+      }
+
+      .brand h1 {
+        margin: 0;
+        font-size: 25px;
+        line-height: 1;
+        letter-spacing: 0;
+      }
+
+      .brand h1 span {
+        color: var(--purple);
+      }
+
+      .brand p {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .language-toggle {
+        display: inline-flex;
+        align-items: center;
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 4px;
+        box-shadow: 0 4px 16px rgba(24, 32, 56, 0.05);
+      }
+
+      .language-toggle button {
+        padding: 10px 20px;
+        border-radius: 999px;
+        color: #27324a;
+        background: transparent;
+      }
+
+      .language-toggle button.active {
+        color: #fff;
+        background: linear-gradient(135deg, var(--purple), var(--purple-2));
+        box-shadow: 0 8px 22px rgba(91, 56, 216, 0.24);
+      }
+
+      .icon-button {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        border: 1px solid var(--line);
+        color: #4d5872;
+        background: #fff;
+        display: grid;
+        place-items: center;
+      }
+
+      .shell {
+        width: min(1480px, calc(100% - 40px));
+        margin: 22px auto;
+        display: grid;
+        grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.8fr);
+        gap: 24px;
+        flex: 1;
+      }
+
+      .conversation,
+      .progress-card {
+        background: rgba(255, 255, 255, 0.92);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        box-shadow: var(--shadow);
+      }
+
+      .conversation {
+        min-height: 690px;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .status-strip {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 18px 24px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .live-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 13px;
+        border-radius: 999px;
+        background: var(--green-soft);
+        color: #11823f;
+        font-weight: 700;
+        font-size: 14px;
+      }
+
+      .live-dot {
+        width: 9px;
+        height: 9px;
+        border-radius: 50%;
+        background: var(--green);
+      }
+
+      .secure-copy {
+        color: #4f5a75;
+        font-size: 14px;
+      }
+
+      .mobile-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .mobile-row input {
+        width: 148px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 9px 10px;
+        background: var(--panel-soft);
+        color: var(--ink);
+      }
+
+      .messages {
+        flex: 1;
+        overflow: auto;
+        padding: 28px 28px 18px;
+      }
+
+      .message-row {
+        display: grid;
+        grid-template-columns: 48px minmax(0, 1fr) 48px;
+        gap: 14px;
+        margin-bottom: 22px;
+      }
+
+      .message-row.customer {
+        grid-template-columns: 48px minmax(0, 1fr) 48px;
+      }
+
+      .avatar {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        font-weight: 800;
+      }
+
+      .avatar.ai {
+        background: var(--purple-soft);
+        color: var(--purple);
+      }
+
+      .avatar.customer {
+        background: #ebe7ff;
+        color: var(--purple);
+      }
+
+      .bubble-wrap {
+        max-width: 720px;
+      }
+
+      .message-row.customer .bubble-wrap {
+        justify-self: end;
+      }
+
+      .bubble {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 16px 18px;
+        background: #fff;
+        box-shadow: 0 8px 24px rgba(24, 32, 56, 0.06);
+        line-height: 1.58;
+        font-size: 15px;
+      }
+
+      .customer .bubble {
+        background: #f2efff;
+        border-color: #ddd6ff;
+      }
+
+      .time {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .message-meta {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 8px;
+      }
+
+      .customer .message-meta {
+        justify-content: flex-end;
+      }
+
+      .customer .time {
+        text-align: right;
+      }
+
+      .replay-button {
+        border: 1px solid var(--line);
+        background: var(--panel-soft);
+        color: var(--purple);
+        border-radius: 8px;
+        padding: 5px 9px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .replay-button:hover {
+        border-color: var(--purple);
+        background: #f2efff;
+      }
+
+      .typing {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        color: var(--muted);
+        padding: 0 28px 12px 90px;
+      }
+
+      .typing.visible {
+        display: flex;
+      }
+
+      .typing span {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #a99bf4;
+        animation: pulse 1s infinite ease-in-out;
+      }
+
+      .typing span:nth-child(2) {
+        animation-delay: 0.12s;
+      }
+
+      .typing span:nth-child(3) {
+        animation-delay: 0.24s;
+      }
+
+      @keyframes pulse {
+        0%, 80%, 100% { opacity: 0.35; transform: translateY(0); }
+        40% { opacity: 1; transform: translateY(-4px); }
+      }
+
+      .composer {
+        margin: 0 28px 28px;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: #fff;
+        padding: 16px;
+        box-shadow: 0 12px 34px rgba(24, 32, 56, 0.07);
+      }
+
+      .voice-panel {
+        min-height: 116px;
+        display: grid;
+        grid-template-columns: 1fr auto 1fr;
+        align-items: center;
+        gap: 18px;
+      }
+
+      .keyboard-button,
+      .reset-button,
+      .send-button,
+      .outline-action {
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: #fff;
+        color: #34405c;
+        padding: 11px 14px;
+        font-weight: 700;
+      }
+
+      .mic-zone {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+      }
+
+      .mic-button {
+        width: 82px;
+        height: 82px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, var(--purple), var(--purple-2));
+        color: #fff;
+        display: grid;
+        place-items: center;
+        box-shadow: 0 14px 34px rgba(91, 56, 216, 0.34);
+        transition: transform 0.18s ease, box-shadow 0.18s ease;
+      }
+
+      .mic-button:hover {
+        transform: translateY(-1px);
+      }
+
+      .mic-button.recording {
+        background: linear-gradient(135deg, #d14343, #ff6b6b);
+        animation: micGlow 1.2s infinite ease-in-out;
+      }
+
+      @keyframes micGlow {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(209, 67, 67, 0.32), 0 14px 34px rgba(91, 56, 216, 0.24); }
+        50% { box-shadow: 0 0 0 14px rgba(209, 67, 67, 0.04), 0 14px 34px rgba(91, 56, 216, 0.24); }
+      }
+
+      .mic-icon {
+        width: 36px;
+        height: 36px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2.2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .voice-copy {
+        min-width: 180px;
+      }
+
+      .voice-copy strong {
+        display: block;
+        font-size: 15px;
+      }
+
+      .voice-copy span {
+        display: block;
+        color: var(--muted);
+        margin-top: 5px;
+        font-size: 13px;
+      }
+
+      .waveform {
+        grid-column: 1 / -1;
+        height: 26px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+      }
+
+      .bar {
+        width: 4px;
+        height: 7px;
+        border-radius: 999px;
+        background: #a595ff;
+        opacity: 0.75;
+      }
+
+      .recording .bar {
+        animation: wave 0.8s infinite ease-in-out;
+      }
+
+      .bar:nth-child(2n) { animation-delay: 0.08s; }
+      .bar:nth-child(3n) { animation-delay: 0.16s; }
+      .bar:nth-child(4n) { animation-delay: 0.24s; }
+
+      @keyframes wave {
+        0%, 100% { height: 6px; }
+        50% { height: 23px; }
+      }
+
+      .text-panel {
+        display: none;
+        gap: 12px;
+        align-items: end;
+      }
+
+      .text-panel.visible {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 78px;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 13px;
+        color: var(--ink);
+        background: var(--panel-soft);
+      }
+
+      .send-button {
+        color: #fff;
+        background: linear-gradient(135deg, var(--purple), var(--purple-2));
+        border-color: transparent;
+        padding-inline: 22px;
+      }
+
+      .hint {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding-top: 16px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .hint-icon {
+        width: 18px;
+        height: 18px;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .progress-card {
+        padding: 28px;
+        min-height: 690px;
+      }
+
+      .progress-card h2 {
+        margin: 0 0 24px;
+        font-size: 20px;
+      }
+
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 8px;
+        align-items: start;
+        border-bottom: 1px solid var(--line);
+        padding-bottom: 26px;
+      }
+
+      .step {
+        text-align: center;
+        color: var(--muted);
+        font-size: 12px;
+        position: relative;
+      }
+
+      .step::after {
+        content: "";
+        position: absolute;
+        left: calc(50% + 22px);
+        top: 20px;
+        width: calc(100% - 28px);
+        border-top: 1px dashed #c7cce0;
+      }
+
+      .step:last-child::after {
+        display: none;
+      }
+
+      .step-icon {
+        width: 42px;
+        height: 42px;
+        margin: 0 auto 8px;
+        border-radius: 50%;
+        background: #eef1f7;
+        border: 1px solid #d7dce8;
+        color: #7d879e;
+        display: grid;
+        place-items: center;
+        font-weight: 900;
+      }
+
+      .step.complete,
+      .step.current {
+        color: var(--ink);
+        font-weight: 700;
+      }
+
+      .step.complete .step-icon {
+        background: var(--green);
+        border-color: var(--green);
+        color: #fff;
+      }
+
+      .step.current .step-icon {
+        background: linear-gradient(135deg, var(--purple), var(--purple-2));
+        border-color: transparent;
+        color: #fff;
+      }
+
+      .result-panel {
+        margin-top: 18px;
+        min-height: 430px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        background: linear-gradient(180deg, #f7fff9, #fff);
+        padding: 28px;
+      }
+
+      .capture-panel {
+        margin-top: 18px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fff;
+        padding: 18px;
+      }
+
+      .capture-panel[hidden] {
+        display: none;
+      }
+
+      .capture-panel h3 {
+        margin: 0 0 12px;
+        font-size: 16px;
+      }
+
+      .capture-list {
+        display: grid;
+        gap: 9px;
+      }
+
+      .capture-row {
+        display: grid;
+        grid-template-columns: minmax(110px, 0.8fr) minmax(0, 1.2fr);
+        gap: 12px;
+        align-items: start;
+        font-size: 13px;
+      }
+
+      .capture-row span {
+        color: var(--muted);
+      }
+
+      .capture-row strong {
+        color: var(--ink);
+        font-weight: 750;
+        overflow-wrap: anywhere;
+      }
+
+      .result-empty {
+        background: var(--panel-soft);
+        display: grid;
+        place-items: center;
+        text-align: center;
+        color: var(--muted);
+      }
+
+      .result-icon {
+        width: 50px;
+        height: 50px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        margin: 0 auto 14px;
+        font-weight: 900;
+      }
+
+      .result-icon.success {
+        color: #fff;
+        background: var(--green);
+      }
+
+      .result-icon.review {
+        color: var(--amber);
+        background: var(--amber-soft);
+      }
+
+      .result-icon.error {
+        color: var(--red);
+        background: var(--red-soft);
+      }
+
+      .result-panel h3 {
+        margin: 0;
+        text-align: center;
+        font-size: 21px;
+      }
+
+      .result-panel .result-copy {
+        margin: 8px auto 20px;
+        max-width: 430px;
+        text-align: center;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .claim-id-box {
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        padding: 18px 0;
+        text-align: center;
+      }
+
+      .claim-id-box span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .claim-id-box strong {
+        display: block;
+        color: var(--green);
+        font-size: 24px;
+        margin-top: 6px;
+      }
+
+      .next-steps {
+        margin-top: 22px;
+      }
+
+      .next-steps h4 {
+        margin: 0 0 14px;
+        font-size: 16px;
+      }
+
+      .next-step {
+        display: grid;
+        grid-template-columns: 38px minmax(0, 1fr);
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .next-step .small-icon {
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        background: #eefaf2;
+        color: var(--green);
+        font-weight: 800;
+      }
+
+      .next-step strong {
+        display: block;
+        font-size: 14px;
+      }
+
+      .next-step span {
+        display: block;
+        color: var(--muted);
+        margin-top: 3px;
+        font-size: 13px;
+      }
+
+      .summary-section {
+        margin-top: 18px;
+        border-top: 1px solid var(--line);
+        padding-top: 16px;
+      }
+
+      .summary-section h4 {
+        margin: 0 0 12px;
+        font-size: 15px;
+      }
+
+      .summary-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .summary-row {
+        display: grid;
+        grid-template-columns: minmax(118px, 0.8fr) minmax(0, 1.2fr);
+        gap: 12px;
+        align-items: start;
+        font-size: 13px;
+      }
+
+      .summary-row span {
+        color: var(--muted);
+      }
+
+      .summary-row strong {
+        color: var(--text);
+        font-weight: 750;
+        overflow-wrap: anywhere;
+      }
+
+      .outline-action {
+        width: 100%;
+        margin-top: 14px;
+        color: var(--purple);
+        border-color: var(--purple-2);
+      }
+
+      .footer-note {
+        text-align: center;
+        color: var(--muted);
+        font-size: 13px;
+        padding: 0 20px 22px;
+      }
+
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 24px;
+        transform: translateX(-50%);
+        background: #182038;
+        color: #fff;
+        padding: 12px 16px;
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease;
+        max-width: min(520px, calc(100% - 32px));
+        text-align: center;
+      }
+
+      .toast.visible {
+        opacity: 1;
+      }
+
+      @media (max-width: 1080px) {
+        .shell {
+          grid-template-columns: 1fr;
+        }
+
+        .conversation,
+        .progress-card {
+          min-height: auto;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .topbar {
+          height: auto;
+          padding: 18px;
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .top-actions,
+        .status-strip,
+        .voice-panel {
+          width: 100%;
+          flex-wrap: wrap;
+        }
+
+        .shell {
+          width: calc(100% - 24px);
+          margin: 12px auto;
+        }
+
+        .status-strip {
+          align-items: flex-start;
+        }
+
+        .message-row,
+        .message-row.customer {
+          grid-template-columns: 38px minmax(0, 1fr);
+        }
+
+        .message-row.customer .avatar {
+          grid-column: 1;
+          grid-row: 1;
+        }
+
+        .message-row.customer .bubble-wrap {
+          grid-column: 2;
+          justify-self: auto;
+        }
+
+        .message-row > .avatar:last-child {
+          display: none;
+        }
+
+        .messages {
+          padding: 20px 16px;
+        }
+
+        .composer {
+          margin: 0 16px 18px;
+        }
+
+        .voice-panel {
+          grid-template-columns: 1fr;
+        }
+
+        .mic-zone {
+          order: -1;
+        }
+
+        .text-panel.visible {
+          grid-template-columns: 1fr;
+        }
+
+        .steps {
+          grid-template-columns: 1fr;
+        }
+
+        .step {
+          display: grid;
+          grid-template-columns: 46px minmax(0, 1fr);
+          align-items: center;
+          text-align: left;
+        }
+
+        .step::after {
+          display: none;
+        }
+
+        .step-icon {
+          margin: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand" aria-label="ClaimsVoice">
+          <div class="brand-mark" aria-hidden="true"></div>
+          <div>
+            <h1>Claims<span>Voice</span></h1>
+            <p>AI Insurance Assistant</p>
+          </div>
+        </div>
+        <div class="top-actions">
+          <div class="language-toggle" aria-label="Language">
+            <button id="hindiButton" class="active" type="button">हिंदी</button>
+            <button id="englishButton" type="button">English</button>
+          </div>
+          <button class="icon-button" id="helpButton" type="button" aria-label="Help">?</button>
+        </div>
+      </header>
+
+      <main class="shell">
+        <section class="conversation" aria-label="Live conversation">
+          <div class="status-strip">
+            <div>
+              <span class="live-pill"><span class="live-dot"></span> Live Conversation</span>
+              <span class="secure-copy">Your conversation is secure and confidential</span>
+            </div>
+            <div class="mobile-row">
+              <label for="mobileNumber">Registered mobile</label>
+              <input id="mobileNumber" inputmode="numeric" maxlength="10" value="9876543210" aria-label="Registered mobile number">
+            </div>
+          </div>
+
+          <div class="messages" id="messages" aria-live="polite"></div>
+          <div class="typing" id="typingIndicator" aria-live="polite">
+            <span></span><span></span><span></span>
+            <strong id="typingText">Processing your request</strong>
+          </div>
+
+          <div class="composer">
+            <div class="voice-panel" id="voicePanel">
+              <button class="keyboard-button" id="toggleTextButton" type="button">Type instead</button>
+              <div class="mic-zone">
+                <button class="mic-button" id="micButton" type="button" aria-label="Start recording">
+                  <svg class="mic-icon" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"></path>
+                    <path d="M5 10v2a7 7 0 0 0 14 0v-2"></path>
+                    <path d="M12 19v3"></path>
+                    <path d="M8 22h8"></path>
+                  </svg>
+                </button>
+                <div class="voice-copy">
+                  <strong id="voiceStatus">Tap to speak</strong>
+                  <span id="voiceSubstatus">You can speak in Hindi or English</span>
+                </div>
+              </div>
+              <button class="reset-button" id="resetButton" type="button">Start New Claim</button>
+              <div class="waveform" id="waveform" aria-hidden="true"></div>
+            </div>
+
+            <form class="text-panel" id="textPanel">
+              <textarea id="textInput" placeholder="Type your message here. Example: Meri car ka accident kal shaam ko Andheri mein hua tha..." aria-label="Type your claim message"></textarea>
+              <button class="send-button" type="submit">Send</button>
+            </form>
+
+            <div class="hint">
+              <svg class="hint-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"></path>
+                <path d="M5 10v2a7 7 0 0 0 14 0v-2"></path>
+                <path d="M12 19v3"></path>
+              </svg>
+              <span id="transcriptHint">Transcript will appear in the conversation after processing.</span>
+            </div>
+          </div>
+        </section>
+
+        <aside class="progress-card" aria-label="Claim progress">
+          <h2>Your Claim Progress</h2>
+          <div class="steps" id="progressSteps"></div>
+          <div class="capture-panel" id="capturePanel" hidden></div>
+          <div class="result-panel result-empty" id="resultPanel">
+            <div>
+              <div class="result-icon review">i</div>
+              <h3>Ready when you are</h3>
+              <p class="result-copy">Speak or type your claim details. We will guide you through the next step.</p>
+            </div>
+          </div>
+        </aside>
+      </main>
+
+      <p class="footer-note">Secured by Sarvam AI · Powered by Saaras v3, Sarvam 105B & Bulbul v3</p>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script>
+      const state = {
+        sessionId: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+        language: "hi-IN",
+        mode: "idle",
+        mediaRecorder: null,
+        audioChunks: [],
+        recordingMimeType: "",
+        recordingStartedAt: 0,
+        isSendingRecording: false,
+        latestClaimId: "",
+      };
+
+      const messages = document.getElementById("messages");
+      const progressSteps = document.getElementById("progressSteps");
+      const capturePanel = document.getElementById("capturePanel");
+      const resultPanel = document.getElementById("resultPanel");
+      const micButton = document.getElementById("micButton");
+      const voicePanel = document.getElementById("voicePanel");
+      const voiceStatus = document.getElementById("voiceStatus");
+      const voiceSubstatus = document.getElementById("voiceSubstatus");
+      const typingIndicator = document.getElementById("typingIndicator");
+      const typingText = document.getElementById("typingText");
+      const toggleTextButton = document.getElementById("toggleTextButton");
+      const textPanel = document.getElementById("textPanel");
+      const textInput = document.getElementById("textInput");
+      const mobileNumber = document.getElementById("mobileNumber");
+      const resetButton = document.getElementById("resetButton");
+      const toast = document.getElementById("toast");
+      const hindiButton = document.getElementById("hindiButton");
+      const englishButton = document.getElementById("englishButton");
+
+      const initialProgress = [
+        { key: "customer", label: "Customer Identified", status: "current" },
+        { key: "policy", label: "Policy Verified", status: "pending" },
+        { key: "information", label: "Information Captured", status: "pending" },
+        { key: "claim", label: "Claim Registered", status: "pending" },
+        { key: "documents", label: "Documents & Next Steps", status: "pending" },
+      ];
+
+      const uiCopy = {
+        hi: {
+          emptyTitle: "जब आप तैयार हों",
+          emptyCopy: "अपनी दावा जानकारी बोलकर या लिखकर बताइए। हम आपको अगले चरण तक ले चलेंगे।",
+          policyReviewTitle: "आपकी पॉलिसी की समीक्षा आवश्यक है",
+          coverageReviewTitle: "आपके मामले की आगे समीक्षा आवश्यक है",
+          missingTitle: "थोड़ी और जानकारी चाहिए",
+          specialistReviewTitle: "विशेषज्ञ समीक्षा आवश्यक",
+          genericTextError: "मुझे आपका अनुरोध समझने में परेशानी हो रही है। कृपया फिर से कोशिश करें।",
+          genericVoiceError: "मुझे आपकी आवाज़ समझने में परेशानी हो रही है। आप अपना जवाब लिखकर भी भेज सकते हैं।",
+          audioUnavailable: "ऑडियो जवाब उपलब्ध नहीं है, लेकिन लिखित जवाब तैयार है।",
+          tapForAudio: "ऑडियो चलाने के लिए पेज पर एक बार टैप करें।",
+          micPermission: "आवाज़ से बातचीत के लिए माइक्रोफोन अनुमति चाहिए। आप अपना जवाब लिख भी सकते हैं।",
+          claimUnavailable: "दावे की जानकारी अभी उपलब्ध नहीं है।",
+          nextAction: "अगला चरण",
+          help: "अपनी दुर्घटना की जानकारी बोलकर या लिखकर बताइए। ऊपर अपना पंजीकृत मोबाइल नंबर सही रखें।",
+          greeting: "नमस्ते। मैं आपका बीमा दावा दर्ज करने में मदद कर सकता हूँ। बताइए, मैं आपकी किस तरह सहायता करूँ?",
+        },
+        en: {
+          emptyTitle: "Ready when you are",
+          emptyCopy: "Speak or type your claim details. We will guide you through the next step.",
+          policyReviewTitle: "We need to review your policy",
+          coverageReviewTitle: "Your case needs further review",
+          missingTitle: "More information needed",
+          specialistReviewTitle: "A claims specialist will assist you",
+          genericTextError: "I'm having trouble processing your request. Please try again.",
+          genericVoiceError: "I am having trouble processing your voice. You can also type your response.",
+          audioUnavailable: "Audio response is unavailable, but the text response is ready.",
+          tapForAudio: "Tap the page to allow audio playback.",
+          micPermission: "Microphone access is required for voice conversations. You can also type your response.",
+          claimUnavailable: "Claim details are unavailable right now.",
+          nextAction: "Next step",
+          help: "Speak or type your accident details. Keep your registered mobile number updated above.",
+          greeting: "Hello. I can help you register your insurance claim. How can I help today?",
+        },
+      };
+
+      function responseLanguage(payload = {}) {
+        const language = payload.response_language || state.language;
+        return String(language).startsWith("hi") ? "hi" : "en";
+      }
+
+      function copyFor(key, payload = {}) {
+        return uiCopy[responseLanguage(payload)][key];
+      }
+
+      function nowTime() {
+        return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      }
+
+      function addMessage(role, text, options = {}) {
+        const row = document.createElement("div");
+        row.className = `message-row ${role}`;
+        const leftAvatar = document.createElement("div");
+        leftAvatar.className = `avatar ${role === "ai" ? "ai" : "customer"}`;
+        leftAvatar.textContent = role === "ai" ? "AI" : "You";
+
+        const bubbleWrap = document.createElement("div");
+        bubbleWrap.className = "bubble-wrap";
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+        bubble.textContent = text;
+        const meta = document.createElement("div");
+        meta.className = "message-meta";
+        const time = document.createElement("div");
+        time.className = "time";
+        time.textContent = nowTime();
+        meta.append(time);
+
+        if (role === "ai" && options.audioUrl) {
+          const replayButton = document.createElement("button");
+          replayButton.type = "button";
+          replayButton.className = "replay-button";
+          replayButton.textContent = "Play response";
+          replayButton.setAttribute("aria-label", "Play assistant audio response");
+          replayButton.addEventListener("click", () => {
+            playResponseAudio(options.audioUrl, options.payload || {});
+          });
+          meta.append(replayButton);
+        }
+
+        bubbleWrap.append(bubble, meta);
+
+        const rightAvatar = document.createElement("div");
+        rightAvatar.className = "avatar customer";
+        rightAvatar.textContent = "You";
+
+        if (role === "customer") {
+          row.append(document.createElement("div"), bubbleWrap, rightAvatar);
+        } else {
+          row.append(leftAvatar, bubbleWrap, document.createElement("div"));
+        }
+        messages.appendChild(row);
+        messages.scrollTop = messages.scrollHeight;
+      }
+
+      function voiceDebug(label, details = {}) {
+        console.info("[ClaimsVoice voice]", label, details);
+      }
+
+      function sanitizeVoicePayload(payload = {}) {
+        return {
+          success: payload.success,
+          error_type: payload.error_type,
+          transcript: payload.transcript || "",
+          transcript_length: payload.transcript ? payload.transcript.length : 0,
+          response_text_length: payload.response_text ? payload.response_text.length : 0,
+          audio_available: payload.audio_available,
+          claim_status: payload.claim_status,
+        };
+      }
+
+      function selectRecordingMimeType() {
+        if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return "";
+        const candidates = [
+          "audio/webm;codecs=opus",
+          "audio/webm",
+          "audio/mp4",
+          "audio/ogg;codecs=opus",
+        ];
+        return candidates.find(type => MediaRecorder.isTypeSupported(type)) || "";
+      }
+
+      function extensionForMimeType(mimeType = "") {
+        const lowered = mimeType.toLowerCase();
+        if (lowered.includes("webm")) return "webm";
+        if (lowered.includes("wav")) return "wav";
+        if (lowered.includes("mp4") || lowered.includes("m4a")) return "m4a";
+        if (lowered.includes("ogg") || lowered.includes("opus")) return "ogg";
+        if (lowered.includes("mpeg") || lowered.includes("mp3")) return "mp3";
+        return "webm";
+      }
+
+      async function playResponseAudio(audioUrl, payload = {}) {
+        if (!audioUrl) return false;
+        setMode("responding");
+        const audio = new Audio(audioUrl);
+        audio.onended = () => setMode("idle");
+        audio.onerror = () => {
+          setMode("idle");
+          showToast(copyFor("audioUnavailable", payload));
+        };
+        try {
+          await audio.play();
+          return true;
+        } catch {
+          setMode("idle");
+          showToast(copyFor("tapForAudio", payload));
+          return false;
+        }
+      }
+
+      function showTyping(label = "Processing your request") {
+        typingText.textContent = label;
+        typingIndicator.classList.add("visible");
+      }
+
+      function hideTyping() {
+        typingIndicator.classList.remove("visible");
+      }
+
+      function showToast(message) {
+        toast.textContent = message;
+        toast.classList.add("visible");
+        setTimeout(() => toast.classList.remove("visible"), 3600);
+      }
+
+      function renderProgress(progress = initialProgress) {
+        progressSteps.innerHTML = "";
+        progress.forEach((step, index) => {
+          const item = document.createElement("div");
+          item.className = `step ${step.status}`;
+          const icon = document.createElement("div");
+          icon.className = "step-icon";
+          icon.textContent = step.status === "complete" ? "✓" : index + 1;
+          const label = document.createElement("div");
+          label.textContent = step.label;
+          item.append(icon, label);
+          progressSteps.appendChild(item);
+        });
+      }
+
+      function renderEmptyPanel() {
+        resultPanel.className = "result-panel result-empty";
+        resultPanel.innerHTML = `
+          <div>
+            <div class="result-icon review">i</div>
+            <h3>${copyFor("emptyTitle")}</h3>
+            <p class="result-copy">${copyFor("emptyCopy")}</p>
+          </div>
+        `;
+      }
+
+      function escapeHtml(value = "") {
+        return String(value)
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function renderSummarySections(summary) {
+        return (summary.sections || []).map((section) => `
+          <div class="summary-section">
+            <h4>${escapeHtml(section.heading)}</h4>
+            <div class="summary-list">
+              ${(section.items || []).map((item) => `
+                <div class="summary-row">
+                  <span>${escapeHtml(item.label)}</span>
+                  <strong>${escapeHtml(item.value || "")}</strong>
+                </div>
+              `).join("")}
+            </div>
+          </div>
+        `).join("");
+      }
+
+      function renderSummaryNextSteps(summary) {
+        const steps = summary.next_steps || [];
+        if (!steps.length) {
+          return "";
+        }
+        return `
+          <div class="next-steps">
+            <h4>${escapeHtml(summary.next_steps_heading || "Next steps")}</h4>
+            ${steps.map((step, index) => `
+              <div class="next-step">
+                <div class="small-icon">${index + 1}</div>
+                <div><strong>${escapeHtml(step.title)}</strong><span>${escapeHtml(step.description)}</span></div>
+              </div>
+            `).join("")}
+          </div>
+        `;
+      }
+
+      function renderReferenceBox(summary, payload) {
+        const referenceValue = summary.reference_value || payload.claim_id || "";
+        if (!referenceValue) {
+          return "";
+        }
+        return `
+          <div class="claim-id-box">
+            <span>${escapeHtml(summary.reference_label)}</span>
+            <strong>${escapeHtml(referenceValue)}</strong>
+          </div>
+        `;
+      }
+
+      function renderCapturedSummary(summary, { final = false } = {}) {
+        if (final || !summary || !Array.isArray(summary.items) || !summary.items.length) {
+          capturePanel.hidden = true;
+          capturePanel.innerHTML = "";
+          return;
+        }
+        capturePanel.hidden = false;
+        capturePanel.innerHTML = `
+          <h3>${escapeHtml(summary.title)}</h3>
+          <div class="capture-list">
+            ${summary.items.map((item) => `
+              <div class="capture-row">
+                <span>${escapeHtml(item.label)}</span>
+                <strong>${escapeHtml(item.value)}</strong>
+              </div>
+            `).join("")}
+          </div>
+        `;
+      }
+
+      function renderResult(payload) {
+        const summary = payload.claim_summary;
+        const status = payload.claim_status || "";
+
+        if (summary && summary.type === "claim_success") {
+          resultPanel.className = "result-panel";
+          resultPanel.innerHTML = `
+            <div class="result-icon success">✓</div>
+            <h3>${escapeHtml(summary.title)}</h3>
+            <p class="result-copy">${escapeHtml(summary.subtitle)}</p>
+            ${renderReferenceBox(summary, payload)}
+            ${renderSummarySections(summary)}
+            ${renderSummaryNextSteps(summary)}
+          `;
+          return;
+        }
+
+        if (status === "HUMAN_REVIEW") {
+          resultPanel.className = "result-panel";
+          if (summary && summary.type === "human_review") {
+            resultPanel.innerHTML = `
+              <div class="result-icon review">!</div>
+              <h3>${escapeHtml(summary.title)}</h3>
+              <p class="result-copy">${escapeHtml(summary.subtitle)}</p>
+              ${renderReferenceBox(summary, payload)}
+              ${renderSummarySections(summary)}
+              ${renderSummaryNextSteps(summary)}
+            `;
+            return;
+          }
+          resultPanel.innerHTML = `
+            <div class="result-icon review">!</div>
+            <h3>${copyFor("specialistReviewTitle", payload)}</h3>
+            <p class="result-copy">${escapeHtml(payload.response_text)}</p>
+          `;
+          return;
+        }
+
+        if (summary && summary.type === "review_required") {
+          resultPanel.className = "result-panel";
+          resultPanel.innerHTML = `
+            <div class="result-icon review">i</div>
+            <h3>${escapeHtml(summary.title)}</h3>
+            <p class="result-copy">${escapeHtml(summary.subtitle)}</p>
+            ${renderReferenceBox(summary, payload)}
+            ${renderSummarySections(summary)}
+            ${renderSummaryNextSteps(summary)}
+          `;
+          return;
+        }
+
+        if (status === "POLICY_NOT_ACTIVE" || status === "COVERAGE_REVIEW_REQUIRED") {
+          resultPanel.className = "result-panel";
+          const titleKey = status === "POLICY_NOT_ACTIVE" ? "policyReviewTitle" : "coverageReviewTitle";
+          resultPanel.innerHTML = `
+            <div class="result-icon review">i</div>
+            <h3>${copyFor(titleKey, payload)}</h3>
+            <p class="result-copy">${escapeHtml(payload.response_text)}</p>
+          `;
+          return;
+        }
+
+        if (status === "MISSING_INFORMATION") {
+          resultPanel.className = "result-panel";
+          resultPanel.innerHTML = `
+            <div class="result-icon review">?</div>
+            <h3>${copyFor("missingTitle", payload)}</h3>
+            <p class="result-copy">${escapeHtml(payload.response_text)}</p>
+          `;
+          return;
+        }
+      }
+
+      function setMode(mode) {
+        state.mode = mode;
+        voicePanel.classList.toggle("recording", mode === "recording");
+        micButton.classList.toggle("recording", mode === "recording");
+        micButton.disabled = mode === "processing" || mode === "responding";
+        textInput.disabled = mode === "processing" || mode === "responding";
+
+        if (mode === "recording") {
+          voiceStatus.textContent = "Recording";
+          voiceSubstatus.textContent = "Tap again to stop recording";
+          micButton.setAttribute("aria-label", "Stop recording");
+        } else if (mode === "processing") {
+          voiceStatus.textContent = "Processing";
+          voiceSubstatus.textContent = "Understanding your claim details";
+          micButton.setAttribute("aria-label", "Processing");
+        } else if (mode === "responding") {
+          voiceStatus.textContent = "AI responding";
+          voiceSubstatus.textContent = "Playing the response when audio is available";
+          micButton.setAttribute("aria-label", "AI responding");
+        } else if (mode === "error") {
+          voiceStatus.textContent = "Try again";
+          voiceSubstatus.textContent = "You can also type your response";
+          micButton.setAttribute("aria-label", "Start recording");
+        } else {
+          voiceStatus.textContent = "Tap to speak";
+          voiceSubstatus.textContent = "You can speak in Hindi or English";
+          micButton.setAttribute("aria-label", "Start recording");
+        }
+      }
+
+      function renderWaveform() {
+        const waveform = document.getElementById("waveform");
+        waveform.innerHTML = "";
+        for (let i = 0; i < 48; i += 1) {
+          waveform.appendChild(document.createElement("span")).className = "bar";
+        }
+      }
+
+      async function handleApiResponse(payload, { addTranscript = false } = {}) {
+        state.sessionId = payload.session_id || state.sessionId;
+        state.latestClaimId = payload.claim_id || state.latestClaimId;
+        hideTyping();
+
+        if (addTranscript && payload.transcript) {
+          addMessage("customer", payload.transcript);
+        }
+
+        const audioUrl = payload.audio_url && payload.audio_available !== false ? payload.audio_url : "";
+        addMessage("ai", payload.response_text, { audioUrl, payload });
+        renderProgress(payload.progress);
+        renderCapturedSummary(payload.captured_summary, { final: Boolean(payload.claim_summary) });
+        renderResult(payload);
+
+        if (audioUrl) {
+          await playResponseAudio(audioUrl, payload);
+        } else {
+          setMode("idle");
+          if (payload.audio_error) {
+            showToast(payload.audio_error);
+          }
+        }
+      }
+
+      async function sendText(message) {
+        const trimmed = message.trim();
+        if (!trimmed) return;
+        addMessage("customer", trimmed);
+        textInput.value = "";
+        setMode("processing");
+        showTyping("Processing your claim details");
+
+        try {
+          const response = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: trimmed,
+              mobile_number: mobileNumber.value.trim(),
+              session_id: state.sessionId,
+              language: state.language,
+            }),
+          });
+          if (!response.ok) throw new Error("Request failed");
+          await handleApiResponse(await response.json());
+        } catch {
+          hideTyping();
+          setMode("error");
+          addMessage("ai", copyFor("genericTextError"));
+        }
+      }
+
+      async function startRecording() {
+        try {
+          const mediaRecorderSupported = Boolean(window.MediaRecorder);
+          voiceDebug("browser support", {
+            mediaRecorderSupported,
+            mediaDevicesSupported: Boolean(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+          });
+          if (!mediaRecorderSupported || !navigator.mediaDevices?.getUserMedia) {
+            throw new Error("MediaRecorder is not supported");
+          }
+
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          state.audioChunks = [];
+          state.isSendingRecording = false;
+          state.recordingStartedAt = Date.now();
+          const selectedMimeType = selectRecordingMimeType();
+          const recorderOptions = selectedMimeType ? { mimeType: selectedMimeType } : {};
+          state.mediaRecorder = new MediaRecorder(stream, recorderOptions);
+          state.recordingMimeType = state.mediaRecorder.mimeType || selectedMimeType || "";
+          voiceDebug("recording started", {
+            selectedMimeType,
+            actualMimeType: state.recordingMimeType,
+          });
+          state.mediaRecorder.ondataavailable = event => {
+            if (event.data.size > 0) {
+              state.audioChunks.push(event.data);
+              voiceDebug("audio chunk", {
+                chunks: state.audioChunks.length,
+                chunkSize: event.data.size,
+                chunkType: event.data.type || "",
+              });
+            }
+          };
+          state.mediaRecorder.onstop = () => {
+            stream.getTracks().forEach(track => track.stop());
+            voiceDebug("recording stopped", {
+              chunks: state.audioChunks.length,
+              durationMs: Date.now() - state.recordingStartedAt,
+            });
+            sendRecording();
+          };
+          state.mediaRecorder.start();
+          setMode("recording");
+        } catch {
+          setMode("error");
+          showToast(copyFor("micPermission"));
+          textPanel.classList.add("visible");
+        }
+      }
+
+      function stopRecording() {
+        if (state.mediaRecorder && state.mediaRecorder.state === "recording") {
+          state.mediaRecorder.stop();
+          setMode("processing");
+          showTyping("Transcribing your voice");
+        }
+      }
+
+      async function sendRecording() {
+        if (state.isSendingRecording) {
+          voiceDebug("duplicate send blocked");
+          return;
+        }
+        state.isSendingRecording = true;
+
+        const mimeType = state.recordingMimeType || state.audioChunks[0]?.type || "audio/webm";
+        const blob = new Blob(state.audioChunks, { type: mimeType });
+        const extension = extensionForMimeType(mimeType);
+        const durationMs = Date.now() - state.recordingStartedAt;
+        voiceDebug("recording blob ready", {
+          mimeType,
+          chunks: state.audioChunks.length,
+          blobSize: blob.size,
+          durationMs,
+        });
+
+        if (!blob.size) {
+          hideTyping();
+          setMode("error");
+          addMessage("ai", copyFor("genericVoiceError"));
+          textPanel.classList.add("visible");
+          voiceDebug("fallback shown", { condition: "EMPTY_AUDIO_BLOB" });
+          state.isSendingRecording = false;
+          return;
+        }
+
+        const form = new FormData();
+        form.append("audio", blob, `browser_recording.${extension}`);
+        form.append("mobile_number", mobileNumber.value.trim());
+        form.append("session_id", state.sessionId);
+        form.append("language", state.language);
+
+        try {
+          voiceDebug("request sent", {
+            endpoint: "/api/voice/process",
+            sent: true,
+            filename: `browser_recording.${extension}`,
+            mimeType,
+            blobSize: blob.size,
+          });
+          const response = await fetch("/api/voice/process", { method: "POST", body: form });
+          const payload = await response.json().catch(() => ({}));
+          voiceDebug("backend response", {
+            httpStatus: response.status,
+            ok: response.ok,
+            payload: sanitizeVoicePayload(payload),
+          });
+          if (!response.ok) {
+            voiceDebug("fallback shown", { condition: "HTTP_ERROR", httpStatus: response.status });
+            throw new Error("Voice request failed");
+          }
+          if (payload.success === false) {
+            voiceDebug("backend reported voice failure", {
+              errorType: payload.error_type || "UNKNOWN",
+            });
+            textPanel.classList.add("visible");
+          }
+          await handleApiResponse(payload, { addTranscript: true });
+        } catch (error) {
+          hideTyping();
+          setMode("error");
+          addMessage("ai", copyFor("genericTextError"));
+          textPanel.classList.add("visible");
+          voiceDebug("fallback shown", {
+            condition: "NETWORK_OR_UNEXPECTED_ERROR",
+            message: error.message || "unknown",
+          });
+        } finally {
+          state.isSendingRecording = false;
+          state.audioChunks = [];
+        }
+      }
+
+      async function resetSession() {
+        try {
+          const response = await fetch("/api/session/reset", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session_id: state.sessionId }),
+          });
+          const payload = await response.json();
+          state.sessionId = payload.session_id || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+        } catch {
+          state.sessionId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+        }
+        state.latestClaimId = "";
+        messages.innerHTML = "";
+        renderProgress();
+        renderCapturedSummary(null);
+        renderEmptyPanel();
+        setMode("idle");
+        greet();
+      }
+
+      async function showClaimDetails() {
+        if (!state.latestClaimId) return;
+        try {
+          const response = await fetch(`/api/claim/${state.latestClaimId}`);
+          if (!response.ok) throw new Error("Claim lookup failed");
+          const claim = await response.json();
+          showToast(`${copyFor("nextAction")}: ${claim.next_action}`);
+        } catch {
+          showToast(copyFor("claimUnavailable"));
+        }
+      }
+
+      function greet() {
+        addMessage("ai", copyFor("greeting"));
+      }
+
+      micButton.addEventListener("click", () => {
+        if (state.mode === "recording") stopRecording();
+        else if (state.mode === "idle" || state.mode === "error") startRecording();
+      });
+
+      toggleTextButton.addEventListener("click", () => {
+        textPanel.classList.toggle("visible");
+        if (textPanel.classList.contains("visible")) textInput.focus();
+      });
+
+      textPanel.addEventListener("submit", event => {
+        event.preventDefault();
+        sendText(textInput.value);
+      });
+
+      resetButton.addEventListener("click", resetSession);
+
+      document.getElementById("helpButton").addEventListener("click", () => {
+        showToast(copyFor("help"));
+      });
+
+      hindiButton.addEventListener("click", () => {
+        state.language = "hi-IN";
+        hindiButton.classList.add("active");
+        englishButton.classList.remove("active");
+      });
+
+      englishButton.addEventListener("click", () => {
+        state.language = "en-IN";
+        englishButton.classList.add("active");
+        hindiButton.classList.remove("active");
+      });
+
+      renderWaveform();
+      renderProgress();
+      greet();
+    </script>
+  </body>
+</html>
