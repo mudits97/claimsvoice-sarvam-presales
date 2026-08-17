@@ -107,6 +107,10 @@ def claim_details_from_state(state: dict[str, Any]) -> dict[str, Any]:
         claim_field: state.get(state_field)
         for state_field, claim_field in STATE_TO_CLAIM_INCIDENT_FIELD_MAP.items()
     }
+    if state.get("vehicle_damage_code"):
+        incident["vehicle_damage_code"] = state["vehicle_damage_code"]
+    if state.get("vehicle_damage_raw_evidence"):
+        incident["vehicle_damage_raw_evidence"] = state["vehicle_damage_raw_evidence"]
 
     return {
         "customer_id": state.get("customer_id", ""),

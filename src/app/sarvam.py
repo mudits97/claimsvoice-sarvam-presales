@@ -106,6 +106,7 @@ class ClaimExtraction(BaseModel):
     third_party_involved: bool | None = None
     injury_reported: bool | None = None
     vehicle_drivable: bool | None = None
+    additional_details: str | None = None
 
 
 class TranscriptionResult(BaseModel):
@@ -132,6 +133,7 @@ CLAIM_EXTRACTION_JSON_SCHEMA: dict[str, Any] = {
         "third_party_involved": {"type": ["boolean", "null"]},
         "injury_reported": {"type": ["boolean", "null"]},
         "vehicle_drivable": {"type": ["boolean", "null"]},
+        "additional_details": {"type": ["string", "null"]},
     },
     "required": [
         "intent",
@@ -143,6 +145,7 @@ CLAIM_EXTRACTION_JSON_SCHEMA: dict[str, Any] = {
         "third_party_involved",
         "injury_reported",
         "vehicle_drivable",
+        "additional_details",
     ],
     "additionalProperties": False,
 }
@@ -154,7 +157,18 @@ Rules:
 - Return only the requested JSON structure.
 - Do not invent missing information.
 - Use null for information not provided.
-- Extract only information explicitly stated or unambiguously supported by the customer's words.
+- Extract only claim facts explicitly stated or unambiguously supported by the customer's current message.
+- Do not fill missing fields.
+- Do not infer plausible values.
+- Temporal expressions are not locations.
+- Location expressions are not times.
+- If a field is unknown, return null.
+- "yesterday" or "kal" can support incident_date.
+- "around 8 PM" can support incident_time "20:00".
+- "at night" is temporal context only; do not use it as incident_location.
+- "near Dwarka" supports incident_location "Dwarka".
+- "outside my office" supports incident_location "outside office" if no more specific place is provided.
+- "near Dwarka outside my office" supports incident_location "Dwarka" and may mention outside office in additional_details.
 - Do not infer missing business facts simply because they are common in accidents.
 - Collision or accident alone does not mean another vehicle or person was involved.
 - If a claim fact is not known, return null.
@@ -164,7 +178,7 @@ Rules:
 - Do not determine claim eligibility.
 - Do not approve, reject, create, or escalate claims.
 - Do not call tools.
-- Normalize obvious vehicle damage phrases into vehicle_damage, even when the customer says there is no major body damage. Examples: tyre damaged, tyre punctured, bumper dent, mirror broken, windshield cracked.
+- Normalize obvious vehicle damage phrases into concise English canonical vehicle_damage values, even when the customer says there is no major body damage. Examples: tyre damage, bumper dent, side mirror damage, windshield damage.
 - For collisions described as another person or vehicle hitting the car, use incident_type "collision" and third_party_involved true.
 - When a statement contains apparently contradictory clauses, prioritize explicit factual evidence over vague conversational qualifiers. For example, "not really, but I got a broken leg" means injury_reported true.
 - For injury_reported, explicit injury evidence such as broken bone, bleeding, cut, pain, hospital, ambulance, unconscious, injury, or hurt means true. Clear denial such as "no one was injured" means false. Ambiguous statements such as "not sure" or "I don't know" mean null.
@@ -199,6 +213,9 @@ Rules:
 - Do not say a claim is registered unless claim_status is INITIATED and claim_id is present.
 - Do not say a case is approved, rejected, or eligible beyond what the deterministic workflow allows.
 - If workflow_status is HUMAN_REVIEW, explain that specialist review is needed and do not say "Claim Registered".
+- Do not disclose customer-specific policy, vehicle, coverage, claim, or document information unless identity_confirmed is true and identity_mismatch is false.
+- If identity_mismatch is true, only provide identity verification assistance. Do not use the trusted customer name or the claimed speaker name as a salutation.
+- Do not change the customer name based on the latest message. The trusted customer identity comes only from workflow_state.
 - If the fallback response includes required policy or claim wording, preserve that business meaning.
 - When the customer's latest message contains meaningful new information, acknowledge that fact naturally before the next step.
 """
@@ -259,9 +276,96 @@ def _is_ambiguous_answer(text: str) -> bool:
     )
 
 
+TEMPORAL_TERMS = {
+    "night",
+    "at night",
+    "in night",
+    "last night",
+    "evening",
+    "in the evening",
+    "morning",
+    "afternoon",
+    "noon",
+    "midnight",
+    "yesterday",
+    "today",
+    "tomorrow",
+    "kal",
+    "aaj",
+    "raat",
+    "shaam",
+    "subah",
+}
+
+NON_LOCATION_CANDIDATES = {
+    "a collision",
+    "collision",
+    "an accident",
+    "accident",
+    "my car",
+    "the car",
+    "car",
+    "vehicle",
+}
+
+
+def _normalized_phrase(value: str | None) -> str:
+    return re.sub(r"\s+", " ", (value or "").strip().lower().strip(" .,!?;:"))
+
+
+def _looks_like_clock_time(value: str | None) -> bool:
+    text = _normalized_phrase(value)
+    return bool(
+        re.fullmatch(r"(?:around|about|at)?\s*(?:[01]?\d|2[0-3])(?::[0-5]\d)?\s*(?:am|pm|a\.m\.|p\.m\.)?", text)
+        or re.fullmatch(r"(?:[01]?\d|2[0-3]):[0-5]\d", text)
+        or re.fullmatch(r"(?:[01]?\d|2[0-3])\s*(?:baje|बजे)", text)
+    )
+
+
+def _is_temporal_expression(value: str | None) -> bool:
+    text = _normalized_phrase(value)
+    if not text:
+        return False
+    if text in TEMPORAL_TERMS:
+        return True
+    if _looks_like_clock_time(text):
+        return True
+    return bool(
+        re.fullmatch(
+            r"(?:at|in|around|about|during)?\s*(?:the\s+)?(?:night|evening|morning|afternoon|midnight|noon)",
+            text,
+        )
+        or re.fullmatch(r"(?:last\s+)?(?:night|evening|morning|afternoon)", text)
+    )
+
+
+def _is_time_period_expression(value: str | None) -> bool:
+    text = _normalized_phrase(value)
+    return text in {"night", "evening", "morning", "afternoon", "midnight", "noon"}
+
+
+def _specific_value_supported_by_text(customer_text: str, value: str | None) -> bool:
+    candidate = _normalized_phrase(value)
+    if not candidate:
+        return False
+    text = _normalized_phrase(customer_text)
+    if candidate in text:
+        return True
+    if candidate == "outside office":
+        return "office" in text and any(term in text for term in ("outside", "bahar")) or "ऑफिस" in customer_text and "बाहर" in customer_text
+    if candidate == "office के बाहर":
+        return ("office" in text or "ऑफिस" in customer_text) and ("outside" in text or "bahar" in text or "बाहर" in customer_text)
+    if candidate.endswith(" ke bahar"):
+        base = candidate.removesuffix(" ke bahar").strip()
+        return bool(base and base in text and ("बाहर" in customer_text or "bahar" in text or "outside" in text))
+    return False
+
+
 def _infer_incident_date(customer_text: str, reference_date: date) -> str | None:
     text = customer_text.lower()
     if "कल" in customer_text or _text_has_roman_word(text, "kal") or _text_has_roman_word(text, "yesterday"):
+        return (reference_date - timedelta(days=1)).isoformat()
+    if _contains_roman_phrase(text, "last night"):
         return (reference_date - timedelta(days=1)).isoformat()
     if "आज" in customer_text or _text_has_roman_word(text, "aaj") or _text_has_roman_word(text, "today"):
         return reference_date.isoformat()
@@ -294,9 +398,33 @@ def _incident_date_supported_by_text(customer_text: str) -> bool:
     )
     return (
         _contains_any_roman_phrase(text, relative_terms)
+        or _contains_roman_phrase(text, "last night")
         or has_written_date
         or _contains_any(customer_text, ("कल", "आज", "तारीख"))
     )
+
+
+def _has_explicit_clock_time(customer_text: str) -> bool:
+    text = customer_text.lower()
+    return bool(
+        re.search(r"\b(?:1[0-2]|0?[1-9])(?::[0-5]\d)?\s*(?:pm|p\.m\.|am|a\.m\.)(?![a-z])", text)
+        or re.search(r"\b(?:1[0-9]|2[0-3]|0?[1-9])\s*baje\b", text)
+        or re.search(r"(?:^|\D)(?:1[0-9]|2[0-3]|0?[1-9])\s*बजे(?![\u0900-\u097F\w])", customer_text)
+        or re.search(r"(?:1[0-2]|0?[1-9]|१२|११|१०|९|८|७|६|५|४|३|२|१)\s*(?:बजे)", customer_text)
+    )
+
+
+def _infer_time_period(customer_text: str) -> str | None:
+    text = customer_text.lower()
+    if _contains_any_roman_phrase(text, ("night", "raat")) or "रात" in customer_text:
+        return "night"
+    if _contains_any_roman_phrase(text, ("evening", "shaam")) or "शाम" in customer_text:
+        return "evening"
+    if _contains_any_roman_phrase(text, ("morning", "subah")) or "सुबह" in customer_text:
+        return "morning"
+    if _contains_any_roman_phrase(text, ("afternoon", "dopahar")) or "दोपहर" in customer_text:
+        return "afternoon"
+    return None
 
 
 def _infer_incident_time(customer_text: str) -> str | None:
@@ -314,28 +442,36 @@ def _infer_incident_time(customer_text: str) -> str | None:
         if meridiem == "am" and hour == 12:
             hour = 0
         return f"{hour:02d}:{minute:02d}"
-    baje_match = re.search(r"\b(1[0-2]|0?[1-9])\s*(?:baje|बजे)\b", text)
-    if baje_match:
-        hour = int(baje_match.group(1))
-        if _contains_any_roman_phrase(text, ("shaam", "evening")) or "शाम" in customer_text:
-            if hour != 12:
-                hour += 12
-        elif (_contains_any_roman_phrase(text, ("raat", "night")) or "रात" in customer_text) and hour <= 5:
-            hour += 12
-        return f"{hour:02d}:00"
     if ("रात" in customer_text or "raat" in text or "midnight" in text) and re.search(r"(12|१२)\s*(बजे|baje|am|a\.m\.)?", text):
         return "00:00"
+    baje_match = re.search(r"\b(1[0-2]|0?[1-9])\s*baje\b", text) or re.search(
+        r"(?:^|\D)(1[0-2]|0?[1-9])\s*बजे(?![\u0900-\u097F\w])",
+        customer_text,
+    )
+    if baje_match:
+        hour = int(baje_match.group(1))
+        has_evening_context = _contains_any_roman_phrase(text, ("shaam", "evening", "raat", "night")) or _contains_any(
+            customer_text,
+            ("शाम", "रात"),
+        )
+        if has_evening_context:
+            if hour != 12:
+                hour += 12
+        return f"{hour:02d}:00"
     if ("शाम" in customer_text or "shaam" in text or "evening" in text) and re.search(r"\b6\b|छह|६", text):
         return "18:00"
-    return None
+    return _infer_time_period(customer_text)
 
 
-def _incident_time_supported_by_text(customer_text: str) -> bool:
+def _incident_time_supported_by_text(customer_text: str, existing_value: str | None = None) -> bool:
     text = customer_text.lower()
-    return bool(
-        re.search(r"\b(?:1[0-2]|0?[1-9])(?::[0-5]\d)?\s*(?:pm|p\.m\.|am|a\.m\.)(?![a-z])", text)
-        or re.search(r"\b(?:1[0-9]|2[0-3]|0?[1-9])\s*(?:baje|बजे)\b", text)
-    ) or _contains_any_roman_phrase(
+    value = _normalized_phrase(existing_value)
+    if value and _is_temporal_expression(value):
+        if re.fullmatch(r"\d{1,2}:\d{2}", value) or _looks_like_clock_time(value):
+            return _has_explicit_clock_time(customer_text)
+        if _is_time_period_expression(value):
+            return _infer_time_period(customer_text) == value
+    return _has_explicit_clock_time(customer_text) or _contains_any_roman_phrase(
         text,
         ("shaam", "evening", "raat", "night", "morning", "afternoon", "time"),
     ) or _contains_any(customer_text, ("शाम", "रात", "सुबह", "दोपहर", "समय"))
@@ -343,16 +479,14 @@ def _incident_time_supported_by_text(customer_text: str) -> bool:
 
 def _infer_incident_location(customer_text: str) -> str | None:
     text = customer_text.lower()
-    if (_contains_roman_phrase(text, "office") or "ऑफिस" in customer_text) and (
-        "बाहर" in customer_text or _contains_roman_phrase(text, "bahar") or _contains_roman_phrase(text, "outside")
-    ):
-        return "office के बाहर"
-    if _contains_roman_phrase(text, "office") and _contains_any_roman_phrase(text, ("near the office", "near office")):
-        return "near the office"
     known_places = {
         "andheri": "Andheri",
+        "dwarka": "Dwarka",
+        "janakpuri": "Janakpuri",
+        "connaught place": "Connaught Place",
         "koramangala": "Koramangala",
         "t nagar": "T Nagar",
+        "nh48": "NH48",
         "mathura": "Mathura",
         "delhi": "Delhi",
         "lucknow": "Lucknow",
@@ -360,27 +494,92 @@ def _infer_incident_location(customer_text: str) -> str | None:
     for marker, display in known_places.items():
         if _contains_roman_phrase(text, marker):
             return display
+    known_devanagari_places = {
+        "अंधेरी": "Andheri",
+        "अन्धेरी": "Andheri",
+        "द्वारका": "Dwarka",
+        "जनकपुरी": "Janakpuri",
+        "दिल्ली": "Delhi",
+        "मुंबई": "Mumbai",
+        "मुम्बई": "Mumbai",
+        "पुणे": "Pune",
+        "हैदराबाद": "Hyderabad",
+        "लखनऊ": "Lucknow",
+        "बेंगलुरु": "Bengaluru",
+        "बैंगलोर": "Bengaluru",
+        "चेन्नई": "Chennai",
+        "जयपुर": "Jaipur",
+        "अहमदाबाद": "Ahmedabad",
+        "चंडीगढ़": "Chandigarh",
+        "मथुरा": "Mathura",
+    }
+    for marker, display in known_devanagari_places.items():
+        if marker in customer_text:
+            return display
+    hinglish_outside_match = re.search(
+        r"\b([A-Za-z0-9][A-Za-z0-9\s-]{0,32}?)\s+के\s+बाहर\b",
+        customer_text,
+        flags=re.IGNORECASE,
+    )
+    if hinglish_outside_match:
+        candidate = _clean_location_candidate(hinglish_outside_match.group(1))
+        if _valid_location_candidate(candidate):
+            if _normalized_phrase(candidate) == "office":
+                return "office के बाहर"
+            return f"{candidate} ke bahar"
+    if (_contains_roman_phrase(text, "office") or "ऑफिस" in customer_text) and (
+        "बाहर" in customer_text or _contains_roman_phrase(text, "bahar") or _contains_roman_phrase(text, "outside")
+    ):
+        return "office के बाहर"
+    if _contains_roman_phrase(text, "office") and _contains_any_roman_phrase(text, ("near the office", "near office")):
+        return "near the office"
     matches = re.finditer(
-        r"\b(?:in|at|near|around|outside)\s+([A-Za-z][A-Za-z\s]{1,32}?)(?=\s+(?:around|at|on|yesterday|today|tomorrow|near|in)\b|[,.]|$)",
+        r"\b(?:in|at|near|around|outside|inside)\s+(?:the\s+)?([A-Za-z0-9][A-Za-z0-9\s-]{0,40}?)(?=\s+(?:around|at|on|yesterday|today|tomorrow|near|in|when|while|and|but|because|where)\b|[,.]|$)",
         customer_text,
         flags=re.IGNORECASE,
     )
     for match in matches:
-        candidate = match.group(1).strip()
-        if candidate.lower() not in {"a collision", "collision", "an accident", "accident"}:
+        candidate = _clean_location_candidate(match.group(1))
+        if _valid_location_candidate(candidate):
             return candidate
     return None
 
 
+def _clean_location_candidate(candidate: str) -> str:
+    cleaned = re.split(
+        r"\b(?:when|while|and|but|because|where|around|at|on|yesterday|today|tomorrow|near|in)\b",
+        candidate.strip(),
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0].strip(" .,!?;:")
+    if cleaned.lower().startswith("the "):
+        cleaned = cleaned[4:].strip()
+    return cleaned
+
+
+def _valid_location_candidate(candidate: str | None) -> bool:
+    text = _normalized_phrase(candidate)
+    if not text:
+        return False
+    if text in NON_LOCATION_CANDIDATES:
+        return False
+    if _is_temporal_expression(text):
+        return False
+    if _looks_like_clock_time(text):
+        return False
+    return True
+
+
 def _incident_location_supported_by_text(customer_text: str, existing_value: str | None) -> bool:
-    text = customer_text.lower()
     existing = (existing_value or "").strip().lower()
-    if existing and existing in text:
+    if not _valid_location_candidate(existing):
+        return False
+    if _specific_value_supported_by_text(customer_text, existing_value):
         return True
-    return _contains_any_roman_phrase(
-        text,
-        ("near", "around", "outside", "inside", "paas", "bahar", "location"),
-    ) or _contains_any(customer_text, ("पास", "बाहर", "स्थान", "कहाँ"))
+    normalized_existing = _normalized_phrase(existing_value)
+    if normalized_existing.startswith("near "):
+        return _specific_value_supported_by_text(customer_text, normalized_existing.removeprefix("near ").strip())
+    return False
 
 
 def _canonical_incident_type(value: str | None) -> str | None:
@@ -467,6 +666,36 @@ def _vehicle_damage_supported_by_text(customer_text: str) -> bool:
     return hindi_supported or english_supported
 
 
+def _canonical_vehicle_damage(value: str | None) -> str | None:
+    if not value:
+        return None
+    raw_value = value.strip()
+    text = raw_value.lower()
+    if not text:
+        return None
+
+    if _contains_any_roman_phrase(text, ("tyre", "tire", "puncture")) or _contains_any(
+        raw_value,
+        ("टायर", "पंक्चर"),
+    ):
+        return "tyre damage"
+    if _contains_roman_phrase(text, "bumper") or _contains_any(raw_value, ("बम्पर", "बंपर")):
+        if _contains_any(raw_value + " " + text, ("dent", "डेंट", "टूट", "damaged", "damage")):
+            if _contains_roman_phrase(text, "rear") or _contains_any(raw_value, ("पीछे", "पिछला", "पिछले")):
+                return "rear bumper dent"
+            return "bumper dent"
+    if _contains_any_roman_phrase(text, ("mirror", "side mirror")) or "शीशा" in raw_value:
+        return "side mirror damage"
+    if _contains_any_roman_phrase(text, ("windshield", "windscreen")) or _contains_any(
+        raw_value,
+        ("कांच", "विंडशील्ड"),
+    ):
+        return "windshield damage"
+    if _contains_any(raw_value + " " + text, ("ज्यादा नुकसान नहीं", "no major body damage", "no major damage")):
+        return "no major damage reported"
+    return raw_value
+
+
 def _infer_vehicle_damage(customer_text: str, existing_value: str | None) -> str | None:
     text = customer_text.lower()
     has_existing_value = bool(existing_value and existing_value.strip())
@@ -487,17 +716,19 @@ def _infer_vehicle_damage(customer_text: str, existing_value: str | None) -> str
         ("puncture", "punctured", "damaged", "broken", "burst"),
     ) or _contains_any(customer_text, ("टूट", "टुट", "खराब", "फट"))
     if has_tyre_reference and has_tyre_damage:
-        return "एक टायर क्षतिग्रस्त"
+        return "tyre damage"
 
     has_bumper_reference = _contains_roman_phrase(text, "bumper") or "बम्पर" in customer_text or "बंपर" in customer_text
     if has_bumper_reference:
-        if _contains_any(combined_text, ("dent", "डेंट", "टूट", "damaged", "damage")):
-            return "बम्पर पर डेंट"
+        if _contains_any(combined_text, ("dent", "डेंट", "टूट", "damaged", "damage", "hit", "impact")):
+            if _contains_roman_phrase(text, "rear") or _contains_any(customer_text, ("पीछे", "पिछला", "पिछले")):
+                return "rear bumper dent"
+            return "bumper dent"
 
     has_mirror_reference = _contains_any_roman_phrase(text, ("mirror", "side mirror")) or "शीशा" in customer_text
     if has_mirror_reference:
         if _contains_any(combined_text, ("broken", "टूट", "cracked", "damage", "damaged")):
-            return "साइड मिरर क्षतिग्रस्त"
+            return "side mirror damage"
 
     has_windshield_reference = (
         _contains_any_roman_phrase(text, ("windshield", "windscreen"))
@@ -506,27 +737,28 @@ def _infer_vehicle_damage(customer_text: str, existing_value: str | None) -> str
     )
     if has_windshield_reference:
         if _contains_any(combined_text, ("cracked", "broken", "टूट", "दरार", "damage", "damaged")):
-            return "विंडशील्ड क्षतिग्रस्त"
+            return "windshield damage"
 
     if _contains_any(combined_text, ("ज्यादा नुकसान नहीं", "no major body damage", "no major damage")):
-        return "कोई बड़ा नुकसान नहीं बताया गया"
+        return "no major damage reported"
 
     if has_existing_value and not existing_mentions_no_damage and _vehicle_damage_supported_by_text(customer_text):
+        canonical_existing = _canonical_vehicle_damage(existing_value)
         if _contains_any_roman_phrase(existing_text, ("tyre", "tire", "puncture")) or _contains_any(
             existing_raw,
             ("टायर", "पंक्चर"),
         ):
-            return existing_value if has_tyre_reference else None
+            return canonical_existing if has_tyre_reference else None
         if _contains_roman_phrase(existing_text, "bumper") or _contains_any(existing_raw, ("बम्पर", "बंपर")):
-            return existing_value if has_bumper_reference else None
+            return canonical_existing if has_bumper_reference else None
         if _contains_any_roman_phrase(existing_text, ("mirror", "side mirror")) or "शीशा" in existing_raw:
-            return existing_value if has_mirror_reference else None
+            return canonical_existing if has_mirror_reference else None
         if _contains_any_roman_phrase(existing_text, ("windshield", "windscreen")) or _contains_any(
             existing_raw,
             ("कांच", "विंडशील्ड"),
         ):
-            return existing_value if has_windshield_reference else None
-        return existing_value
+            return canonical_existing if has_windshield_reference else None
+        return canonical_existing
     return None
 
 
@@ -698,6 +930,22 @@ def _infer_vehicle_drivable(
     return None
 
 
+def _infer_additional_details(customer_text: str, existing_value: str | None) -> str | None:
+    details: list[str] = []
+    time_period = _infer_time_period(customer_text)
+    if time_period:
+        details.append(f"time period: {time_period}")
+    if re.search(r"\b(?:coming|came)\s+out\s+of\s+(?:my\s+)?office\b", customer_text, flags=re.IGNORECASE):
+        details.append("coming out of office")
+    if _contains_any(customer_text, ("office से निकल", "ऑफिस से निकल")):
+        details.append("coming out of office")
+    if details:
+        return "; ".join(dict.fromkeys(details))
+    if existing_value and _specific_value_supported_by_text(customer_text, existing_value):
+        return existing_value.strip()
+    return None
+
+
 def normalize_claim_extraction(
     customer_text: str,
     extraction: ClaimExtraction,
@@ -717,7 +965,11 @@ def normalize_claim_extraction(
     inferred_time = _infer_incident_time(customer_text)
     payload["incident_time"] = (
         inferred_time
-        or (payload["incident_time"] if _incident_time_supported_by_text(customer_text) else None)
+        or (
+            payload["incident_time"]
+            if _incident_time_supported_by_text(customer_text, payload["incident_time"])
+            else None
+        )
     )
     inferred_location = _infer_incident_location(customer_text)
     payload["incident_location"] = (
@@ -744,8 +996,27 @@ def normalize_claim_extraction(
         payload["vehicle_drivable"],
         last_requested_field,
     )
+    payload["additional_details"] = _infer_additional_details(
+        customer_text,
+        payload.get("additional_details"),
+    )
 
     return ClaimExtraction.model_validate(payload)
+
+
+def deterministic_claim_extraction(
+    customer_text: str,
+    *,
+    reference_date: date | None = None,
+    last_requested_field: str | None = None,
+) -> ClaimExtraction:
+    """Extract obvious FNOL facts without a live model response."""
+    return normalize_claim_extraction(
+        customer_text,
+        ClaimExtraction(intent="motor_claim"),
+        reference_date=reference_date,
+        last_requested_field=last_requested_field,
+    )
 
 
 def create_sarvam_client(api_key: str | None = None) -> SarvamAI:
@@ -868,13 +1139,21 @@ def _supported_extraction_facts(extraction: ClaimExtraction | None) -> dict[str,
 
 
 def _customer_response_state_snapshot(state: dict[str, Any]) -> dict[str, Any]:
+    if state.get("identity_mismatch"):
+        return {
+            "identity_confirmed": False,
+            "identity_mismatch": True,
+            "speaker_claimed_name": state.get("speaker_claimed_name", ""),
+            "workflow_status": state.get("workflow_status", "IDENTITY_MISMATCH"),
+            "next_action": "MANUAL_IDENTITY_VERIFICATION",
+        }
+
+    identity_confirmed = state.get("identity_confirmed") is True
     allowed_keys = (
         "customer_name",
-        "policy_id",
-        "policy_status",
-        "policy_type",
-        "vehicle_name",
-        "vehicle_registration",
+        "identity_confirmed",
+        "identity_mismatch",
+        "speaker_claimed_name",
         "incident_date",
         "incident_time",
         "incident_location",
@@ -884,20 +1163,28 @@ def _customer_response_state_snapshot(state: dict[str, Any]) -> dict[str, Any]:
         "injury_reported",
         "vehicle_drivable",
         "workflow_status",
-        "claim_status",
-        "claim_id",
         "missing_fields",
         "next_missing_field",
         "last_requested_field",
-        "next_action",
     )
+    if identity_confirmed:
+        allowed_keys += (
+            "policy_id",
+            "policy_status",
+            "policy_type",
+            "vehicle_name",
+            "vehicle_registration",
+            "claim_status",
+            "claim_id",
+            "next_action",
+        )
     snapshot = {
         key: state.get(key)
         for key in allowed_keys
         if state.get(key) not in ("", None, [])
     }
     documents = state.get("required_documents") or []
-    if documents:
+    if identity_confirmed and documents:
         snapshot["required_documents"] = [
             document.get("name", "")
             for document in documents
@@ -1090,6 +1377,7 @@ def synthesize_speech_to_file(
     client: Any | None = None,
     language_code: str = "hi-IN",
     speaker: str = "shubh",
+    filename: str | None = None,
 ) -> SpeechSynthesisResult:
     """Generate a Bulbul v3 audio file for the final customer response."""
     if not text.strip():
@@ -1135,8 +1423,8 @@ def synthesize_speech_to_file(
     else:
         audio_bytes = bytes(audio_payload)
 
-    filename = f"claimsvoice-{uuid4().hex}.mp3"
-    output_path = output_dir / filename
+    safe_filename = Path(filename).name if filename else f"claimsvoice-{uuid4().hex}.mp3"
+    output_path = output_dir / safe_filename
     output_path.write_bytes(audio_bytes)
     duration_ms = int((time.perf_counter() - started_at) * 1000)
     logger.warning(
@@ -1147,5 +1435,5 @@ def synthesize_speech_to_file(
 
     return SpeechSynthesisResult(
         audio_path=str(output_path),
-        audio_url=f"{public_url_prefix}/{filename}",
+        audio_url=f"{public_url_prefix}/{safe_filename}",
     )

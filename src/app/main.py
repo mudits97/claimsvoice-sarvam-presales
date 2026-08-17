@@ -13,11 +13,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.customer_experience import (
+    _elapsed_ms,
     get_customer_claim,
     process_chat_message,
     process_voice_message,
+    render_session_view,
     reset_session,
 )
+from app.sarvam import SarvamConfigurationError, SarvamSpeechError, transcribe_audio_bytes
 from app.tools import (
     MockBackendError,
     check_coverage,
@@ -82,6 +85,11 @@ class ChatRequest(BaseModel):
 
 class SessionResetRequest(BaseModel):
     session_id: str | None = None
+
+
+class SessionViewRequest(BaseModel):
+    session_id: str
+    language: str = Field("hi-IN", examples=["hi-IN"])
 
 
 def _model_to_dict(model: BaseModel) -> dict[str, Any]:
@@ -204,10 +212,78 @@ async def voice_process(
         ) from error
 
 
+@app.post("/api/voice/transcribe")
+async def voice_transcribe(
+    audio: UploadFile = File(...),
+    mobile_number: str = Form(...),
+    session_id: str | None = Form(None),
+    language: str = Form("hi-IN"),
+) -> dict[str, Any]:
+    import time
+
+    request_started_at = time.perf_counter()
+    try:
+        audio_bytes = await audio.read()
+        debug_path = _save_single_debug_audio(
+            audio_bytes,
+            filename=audio.filename,
+            content_type=audio.content_type,
+        )
+        logger.warning(
+            "VOICE TURN LATENCY T1 audio received by backend endpoint=/api/voice/transcribe "
+            "content_type=%s filename=%s bytes=%s debug_audio=%s",
+            audio.content_type or "",
+            audio.filename or "",
+            len(audio_bytes),
+            str(debug_path) if debug_path else "",
+        )
+        stt_started_at = time.perf_counter()
+        logger.warning("VOICE TURN LATENCY T2 Saaras STT request started")
+        transcription = transcribe_audio_bytes(
+            audio_bytes,
+            filename=audio.filename or "recording.webm",
+            content_type=audio.content_type or "audio/webm",
+        )
+        stt_ms = _elapsed_ms(stt_started_at)
+        total_ms = _elapsed_ms(request_started_at)
+        logger.warning(
+            "VOICE TURN LATENCY T3 Saaras STT completed stt_ms=%s total_transcribe_ms=%s",
+            stt_ms,
+            total_ms,
+        )
+        return {
+            "success": True,
+            "session_id": session_id,
+            "transcript": transcription.transcript,
+            "detected_language": transcription.language_code,
+            "selected_language": language,
+            "latency_trace": {
+                "turn_type": "voice_transcribe",
+                "audio_bytes": len(audio_bytes),
+                "saaras_stt_ms": stt_ms,
+                "transcribe_backend_total_ms": total_ms,
+            },
+        }
+    except (SarvamConfigurationError, SarvamSpeechError) as error:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "VOICE_TRANSCRIPTION_FAILED",
+                "message": "I am having trouble processing your voice. You can also type your response.",
+                "error_type": type(error).__name__,
+            },
+        ) from error
+
+
 @app.post("/api/session/reset")
 def session_reset(request: SessionResetRequest) -> dict[str, str]:
     session_id = reset_session(request.session_id)
     return {"session_id": session_id, "status": "reset"}
+
+
+@app.post("/api/session/view")
+def session_view(request: SessionViewRequest) -> dict[str, Any]:
+    return render_session_view(request.session_id, request.language)
 
 
 @app.get("/api/claim/{claim_id}")

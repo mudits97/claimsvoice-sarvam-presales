@@ -290,6 +290,11 @@
         font-size: 15px;
       }
 
+      .bubble.loading {
+        color: var(--muted);
+        background: var(--panel-soft);
+      }
+
       .customer .bubble {
         background: #f2efff;
         border-color: #ddd6ff;
@@ -1018,13 +1023,25 @@
         sessionId: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
         language: "hi-IN",
         mode: "idle",
+        responseState: "IDLE",
         mediaRecorder: null,
         audioChunks: [],
         recordingMimeType: "",
         recordingStartedAt: 0,
         isSendingRecording: false,
         latestClaimId: "",
+        latestPayload: null,
       };
+
+      const RESPONSE_STATES = Object.freeze({
+        IDLE: "IDLE",
+        PROCESSING: "PROCESSING",
+        TEXT_READY: "TEXT_READY",
+        AUDIO_GENERATING: "AUDIO_GENERATING",
+        READY: "READY",
+        PLAYING: "PLAYING",
+        AUDIO_FAILED: "AUDIO_FAILED",
+      });
 
       const messages = document.getElementById("messages");
       const progressSteps = document.getElementById("progressSteps");
@@ -1063,6 +1080,7 @@
           specialistReviewTitle: "विशेषज्ञ समीक्षा आवश्यक",
           genericTextError: "मुझे आपका अनुरोध समझने में परेशानी हो रही है। कृपया फिर से कोशिश करें।",
           genericVoiceError: "मुझे आपकी आवाज़ समझने में परेशानी हो रही है। आप अपना जवाब लिखकर भी भेज सकते हैं।",
+          aiResponding: "AI जवाब दे रहा है...",
           audioUnavailable: "ऑडियो जवाब उपलब्ध नहीं है, लेकिन लिखित जवाब तैयार है।",
           tapForAudio: "ऑडियो चलाने के लिए पेज पर एक बार टैप करें।",
           micPermission: "आवाज़ से बातचीत के लिए माइक्रोफोन अनुमति चाहिए। आप अपना जवाब लिख भी सकते हैं।",
@@ -1080,6 +1098,7 @@
           specialistReviewTitle: "A claims specialist will assist you",
           genericTextError: "I'm having trouble processing your request. Please try again.",
           genericVoiceError: "I am having trouble processing your voice. You can also type your response.",
+          aiResponding: "AI is responding...",
           audioUnavailable: "Audio response is unavailable, but the text response is ready.",
           tapForAudio: "Tap the page to allow audio playback.",
           micPermission: "Microphone access is required for voice conversations. You can also type your response.",
@@ -1114,6 +1133,9 @@
         bubbleWrap.className = "bubble-wrap";
         const bubble = document.createElement("div");
         bubble.className = "bubble";
+        if (options.loading) {
+          bubble.classList.add("loading");
+        }
         bubble.textContent = text;
         const meta = document.createElement("div");
         meta.className = "message-meta";
@@ -1122,14 +1144,16 @@
         time.textContent = nowTime();
         meta.append(time);
 
-        if (role === "ai" && options.audioUrl) {
-          const replayButton = document.createElement("button");
+        let replayButton = null;
+        if (role === "ai" && (options.audioUrl || options.audioPendingUrl)) {
+          replayButton = document.createElement("button");
           replayButton.type = "button";
           replayButton.className = "replay-button";
-          replayButton.textContent = "Play response";
+          replayButton.textContent = options.audioPendingUrl ? "Preparing audio" : "Play response";
+          replayButton.disabled = Boolean(options.audioPendingUrl);
           replayButton.setAttribute("aria-label", "Play assistant audio response");
           replayButton.addEventListener("click", () => {
-            playResponseAudio(options.audioUrl, options.payload || {});
+            playResponseAudio(options.audioUrl || options.audioPendingUrl, options.payload || {});
           });
           meta.append(replayButton);
         }
@@ -1147,6 +1171,41 @@
         }
         messages.appendChild(row);
         messages.scrollTop = messages.scrollHeight;
+        return { row, bubble, meta, replayButton };
+      }
+
+      function setResponseState(responseState) {
+        state.responseState = responseState;
+        voiceDebug("response state", { responseState });
+      }
+
+      function addAssistantPlaceholder() {
+        setResponseState(RESPONSE_STATES.PROCESSING);
+        return addMessage("ai", copyFor("aiResponding"), { loading: true });
+      }
+
+      function updateAssistantMessage(message, text, options = {}) {
+        const target = message || addMessage("ai", text);
+        target.bubble.classList.remove("loading");
+        target.bubble.textContent = text;
+        if (target.replayButton) {
+          target.replayButton.remove();
+          target.replayButton = null;
+        }
+        if (options.audioUrl) {
+          const replayButton = document.createElement("button");
+          replayButton.type = "button";
+          replayButton.className = "replay-button";
+          replayButton.textContent = "Play response";
+          replayButton.setAttribute("aria-label", "Play assistant audio response");
+          replayButton.addEventListener("click", () => {
+            playResponseAudio(options.audioUrl, options.payload || {});
+          });
+          target.meta.append(replayButton);
+          target.replayButton = replayButton;
+        }
+        messages.scrollTop = messages.scrollHeight;
+        return target;
       }
 
       function voiceDebug(label, details = {}) {
@@ -1161,7 +1220,9 @@
           transcript_length: payload.transcript ? payload.transcript.length : 0,
           response_text_length: payload.response_text ? payload.response_text.length : 0,
           audio_available: payload.audio_available,
+          audio_pending: payload.audio_pending,
           claim_status: payload.claim_status,
+          latency_trace: payload.latency_trace || {},
         };
       }
 
@@ -1196,13 +1257,82 @@
           showToast(copyFor("audioUnavailable", payload));
         };
         try {
+          const playRequestedAt = performance.now();
           await audio.play();
+          const playStartedAt = performance.now();
+          const messageRenderedAt = Number(payload.frontendMessageRenderedAt || 0);
+          const renderToPlayMs = messageRenderedAt ? Math.round(playStartedAt - messageRenderedAt) : 0;
+          voiceDebug("T12 frontend starts playback", {
+            audioUrl,
+            frontendPlaybackStarted: true,
+            message_rendered_to_audio_play_started_ms: renderToPlayMs,
+            play_request_ms: Math.round(playStartedAt - playRequestedAt),
+            latency_trace: payload.latency_trace || {},
+          });
           return true;
         } catch {
           setMode("idle");
           showToast(copyFor("tapForAudio", payload));
           return false;
         }
+      }
+
+      async function waitForAudio(audioUrl, payload = {}, replayButton = null) {
+        const result = await pollAudioReady(audioUrl, payload);
+        if (result.ready) {
+          if (replayButton) {
+            replayButton.disabled = false;
+            replayButton.textContent = "Play response";
+          }
+          return playResponseAudio(audioUrl, {
+            ...payload,
+            latency_trace: {
+              ...(payload.latency_trace || {}),
+              frontend_audio_wait_ms: result.readyMs,
+            },
+          });
+        }
+        if (replayButton) {
+          replayButton.disabled = false;
+          replayButton.textContent = "Play response";
+        }
+        showToast(copyFor("audioUnavailable", payload));
+        return false;
+      }
+
+      async function pollAudioReady(audioUrl, payload = {}) {
+        if (!audioUrl) return { ready: false, readyMs: 0 };
+        const startedAt = performance.now();
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          try {
+            const response = await fetch(audioUrl, { method: "HEAD", cache: "no-store" });
+            if (response.ok) {
+              const readyMs = Math.round(performance.now() - startedAt);
+              voiceDebug("audio became playable", { audioUrl, readyMs });
+              return { ready: true, readyMs };
+            }
+          } catch {
+            // The generated file is expected to be missing while Bulbul is still running.
+          }
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        return { ready: false, readyMs: Math.round(performance.now() - startedAt) };
+      }
+
+      function logVoiceLatencyTrace({ transcribePayload = {}, chatPayload = {}, frontend = {} } = {}) {
+        const transcribe = transcribePayload.latency_trace || {};
+        const chat = chatPayload.latency_trace || {};
+        const rows = {
+          "Audio upload/request": `${frontend.uploadRoundtripMs || 0} ms`,
+          "Saaras STT": `${transcribe.saaras_stt_ms || chat.saaras_stt_ms || 0} ms`,
+          "Sarvam reasoning": `${chat.sarvam_reasoning_ms || 0} ms`,
+          "State/workflow": `${(chat.state_merge_ms || 0) + (chat.workflow_ms || 0)} ms`,
+          "Response generation": `${chat.response_generation_ms || 0} ms`,
+          "Bulbul TTS": chat.bulbul_tts_ms ? `${chat.bulbul_tts_ms} ms` : (chat.bulbul_tts_status || "queued"),
+          "Frontend/audio handling": `${frontend.frontendAudioMs || 0} ms`,
+          "Total before text": `${frontend.responseTextMs || 0} ms`,
+        };
+        console.info("[ClaimsVoice voice] VOICE TURN LATENCY", rows);
       }
 
       function showTyping(label = "Processing your request") {
@@ -1433,29 +1563,117 @@
         }
       }
 
-      async function handleApiResponse(payload, { addTranscript = false } = {}) {
+      function rememberPayload(payload) {
         state.sessionId = payload.session_id || state.sessionId;
         state.latestClaimId = payload.claim_id || state.latestClaimId;
+        state.latestPayload = payload;
+      }
+
+      function renderPayloadDetails(payload) {
+        renderProgress(payload.progress);
+        renderCapturedSummary(payload.captured_summary, { final: Boolean(payload.claim_summary) });
+        renderResult(payload);
+      }
+
+      async function handleApiResponse(payload, { addTranscript = false } = {}) {
+        rememberPayload(payload);
         hideTyping();
 
         if (addTranscript && payload.transcript) {
           addMessage("customer", payload.transcript);
         }
 
-        const audioUrl = payload.audio_url && payload.audio_available !== false ? payload.audio_url : "";
-        addMessage("ai", payload.response_text, { audioUrl, payload });
-        renderProgress(payload.progress);
-        renderCapturedSummary(payload.captured_summary, { final: Boolean(payload.claim_summary) });
-        renderResult(payload);
+        const pendingAudioUrl = payload.audio_pending && payload.audio_url ? payload.audio_url : "";
+        const audioUrl = !pendingAudioUrl && payload.audio_url && payload.audio_available !== false ? payload.audio_url : "";
+        const aiMessage = addMessage("ai", payload.response_text, {
+          audioUrl,
+          audioPendingUrl: pendingAudioUrl,
+          payload,
+        });
+        renderPayloadDetails(payload);
 
-        if (audioUrl) {
-          await playResponseAudio(audioUrl, payload);
+        if (pendingAudioUrl) {
+          setMode("idle");
+          void waitForAudio(pendingAudioUrl, payload, aiMessage.replayButton);
+        } else if (audioUrl) {
+          void playResponseAudio(audioUrl, payload);
         } else {
           setMode("idle");
           if (payload.audio_error) {
             showToast(payload.audio_error);
           }
         }
+      }
+
+      async function handleVoiceApiResponse(payload, { placeholderMessage = null, transcribePayload = {}, frontend = {} } = {}) {
+        rememberPayload(payload);
+        hideTyping();
+
+        const pendingAudioUrl = payload.audio_pending && payload.audio_url ? payload.audio_url : "";
+        const audioUrl = !pendingAudioUrl && payload.audio_url && payload.audio_available !== false ? payload.audio_url : "";
+
+        setResponseState(RESPONSE_STATES.TEXT_READY);
+        if (pendingAudioUrl || audioUrl) {
+          setResponseState(pendingAudioUrl ? RESPONSE_STATES.AUDIO_GENERATING : RESPONSE_STATES.READY);
+          setMode("responding");
+        }
+
+        let readyAudioUrl = audioUrl;
+        let frontendAudioMs = 0;
+        if (pendingAudioUrl) {
+          const audioWaitStartedAt = performance.now();
+          const audioReady = await pollAudioReady(pendingAudioUrl, payload);
+          frontendAudioMs = Math.round(performance.now() - audioWaitStartedAt);
+          if (audioReady.ready) {
+            readyAudioUrl = pendingAudioUrl;
+            payload.latency_trace = {
+              ...(payload.latency_trace || {}),
+              frontend_audio_wait_ms: audioReady.readyMs,
+            };
+            setResponseState(RESPONSE_STATES.READY);
+          } else {
+            setResponseState(RESPONSE_STATES.AUDIO_FAILED);
+            readyAudioUrl = "";
+          }
+        }
+
+        renderPayloadDetails(payload);
+        const messageRenderedAt = performance.now();
+        const renderedMessage = updateAssistantMessage(placeholderMessage, payload.response_text, {
+          audioUrl: readyAudioUrl,
+          payload,
+        });
+        const playbackPayload = {
+          ...payload,
+          frontendMessageRenderedAt: messageRenderedAt,
+        };
+
+        let played = false;
+        if (readyAudioUrl) {
+          setResponseState(RESPONSE_STATES.PLAYING);
+          played = await playResponseAudio(readyAudioUrl, playbackPayload);
+        }
+
+        if (!readyAudioUrl || !played) {
+          setMode("idle");
+          if (!readyAudioUrl || payload.audio_error) {
+            showToast(payload.audio_error || copyFor("audioUnavailable", payload));
+          }
+          if (readyAudioUrl && !played) {
+            setResponseState(RESPONSE_STATES.READY);
+          }
+        }
+
+        logVoiceLatencyTrace({
+          transcribePayload,
+          chatPayload: payload,
+          frontend: {
+            uploadRoundtripMs: frontend.uploadRoundtripMs || 0,
+            responseTextMs: frontend.responseTextMs || 0,
+            frontendAudioMs,
+          },
+        });
+        return renderedMessage;
       }
 
       async function sendText(message) {
@@ -1540,7 +1758,7 @@
         if (state.mediaRecorder && state.mediaRecorder.state === "recording") {
           state.mediaRecorder.stop();
           setMode("processing");
-          showTyping("Transcribing your voice");
+          showTyping("Understanding...");
         }
       }
 
@@ -1578,36 +1796,80 @@
         form.append("session_id", state.sessionId);
         form.append("language", state.language);
 
+        let assistantPlaceholder = null;
         try {
+          const turnStartedAt = performance.now();
           voiceDebug("request sent", {
-            endpoint: "/api/voice/process",
+            endpoint: "/api/voice/transcribe",
             sent: true,
             filename: `browser_recording.${extension}`,
             mimeType,
             blobSize: blob.size,
           });
-          const response = await fetch("/api/voice/process", { method: "POST", body: form });
-          const payload = await response.json().catch(() => ({}));
-          voiceDebug("backend response", {
-            httpStatus: response.status,
-            ok: response.ok,
-            payload: sanitizeVoicePayload(payload),
+          const transcribeStartedAt = performance.now();
+          const transcribeResponse = await fetch("/api/voice/transcribe", { method: "POST", body: form });
+          const transcribePayload = await transcribeResponse.json().catch(() => ({}));
+          const uploadRoundtripMs = Math.round(performance.now() - transcribeStartedAt);
+          voiceDebug("transcription response", {
+            httpStatus: transcribeResponse.status,
+            ok: transcribeResponse.ok,
+            transcript_length: transcribePayload.transcript ? transcribePayload.transcript.length : 0,
+            latency_trace: transcribePayload.latency_trace || {},
           });
-          if (!response.ok) {
-            voiceDebug("fallback shown", { condition: "HTTP_ERROR", httpStatus: response.status });
+          if (!transcribeResponse.ok || transcribePayload.success === false || !transcribePayload.transcript) {
+            voiceDebug("fallback shown", { condition: "TRANSCRIPTION_ERROR", httpStatus: transcribeResponse.status });
             throw new Error("Voice request failed");
           }
-          if (payload.success === false) {
-            voiceDebug("backend reported voice failure", {
-              errorType: payload.error_type || "UNKNOWN",
-            });
-            textPanel.classList.add("visible");
+
+          hideTyping();
+          addMessage("customer", transcribePayload.transcript);
+          assistantPlaceholder = addAssistantPlaceholder();
+
+          const chatStartedAt = performance.now();
+          const chatResponse = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message: transcribePayload.transcript,
+              mobile_number: mobileNumber.value.trim(),
+              session_id: state.sessionId,
+              language: state.language,
+            }),
+          });
+          const chatPayload = await chatResponse.json().catch(() => ({}));
+          const responseTextMs = Math.round(performance.now() - turnStartedAt);
+          voiceDebug("backend response", {
+            httpStatus: chatResponse.status,
+            ok: chatResponse.ok,
+            payload: sanitizeVoicePayload(chatPayload),
+          });
+          if (!chatResponse.ok) {
+            voiceDebug("fallback shown", { condition: "CHAT_HTTP_ERROR", httpStatus: chatResponse.status });
+            throw new Error("Voice chat request failed");
           }
-          await handleApiResponse(payload, { addTranscript: true });
+          chatPayload.transcript = transcribePayload.transcript;
+          chatPayload.detected_language = transcribePayload.detected_language;
+          chatPayload.latency_trace = {
+            ...(chatPayload.latency_trace || {}),
+            voice_upload_roundtrip_ms: uploadRoundtripMs,
+            voice_chat_roundtrip_ms: Math.round(performance.now() - chatStartedAt),
+          };
+          await handleVoiceApiResponse(chatPayload, {
+            transcribePayload,
+            placeholderMessage: assistantPlaceholder,
+            frontend: {
+              uploadRoundtripMs,
+              responseTextMs,
+            },
+          });
         } catch (error) {
           hideTyping();
           setMode("error");
-          addMessage("ai", copyFor("genericTextError"));
+          if (assistantPlaceholder) {
+            updateAssistantMessage(assistantPlaceholder, copyFor("genericTextError"));
+          } else {
+            addMessage("ai", copyFor("genericTextError"));
+          }
           textPanel.classList.add("visible");
           voiceDebug("fallback shown", {
             condition: "NETWORK_OR_UNEXPECTED_ERROR",
@@ -1632,6 +1894,7 @@
           state.sessionId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
         }
         state.latestClaimId = "";
+        state.latestPayload = null;
         messages.innerHTML = "";
         renderProgress();
         renderCapturedSummary(null);
@@ -1654,6 +1917,32 @@
 
       function greet() {
         addMessage("ai", copyFor("greeting"));
+      }
+
+      async function refreshSessionView() {
+        if (!state.sessionId || !state.latestPayload) {
+          renderEmptyPanel();
+          return;
+        }
+        try {
+          const response = await fetch("/api/session/view", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              session_id: state.sessionId,
+              language: state.language,
+            }),
+          });
+          if (!response.ok) throw new Error("Session view refresh failed");
+          const payload = await response.json();
+          state.latestPayload = payload;
+          state.latestClaimId = payload.claim_id || state.latestClaimId;
+          renderProgress(payload.progress);
+          renderCapturedSummary(payload.captured_summary, { final: Boolean(payload.claim_summary) });
+          renderResult(payload);
+        } catch {
+          showToast(copyFor("genericTextError"));
+        }
       }
 
       micButton.addEventListener("click", () => {
@@ -1681,12 +1970,14 @@
         state.language = "hi-IN";
         hindiButton.classList.add("active");
         englishButton.classList.remove("active");
+        refreshSessionView();
       });
 
       englishButton.addEventListener("click", () => {
         state.language = "en-IN";
         englishButton.classList.add("active");
         hindiButton.classList.remove("active");
+        refreshSessionView();
       });
 
       renderWaveform();

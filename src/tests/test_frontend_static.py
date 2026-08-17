@@ -28,7 +28,8 @@ def test_frontend_uses_mediarecorder_and_customer_endpoints() -> None:
 
     assert "MediaRecorder" in html
     assert "/api/chat" in html
-    assert "/api/voice/process" in html
+    assert "/api/voice/transcribe" in html
+    assert "/api/session/view" in html
     assert "/api/session/reset" in html
     assert "/api/claim/" in html
 
@@ -50,9 +51,50 @@ def test_frontend_plays_and_replays_bulbul_audio() -> None:
 
     assert "payload.audio_available" in html
     assert "playResponseAudio(audioUrl, payload)" in html
+    assert "waitForAudio" in html
+    assert "audio_pending" in html
     assert "new Audio(audioUrl)" in html
     assert "Play response" in html
     assert "replay-button" in html
+    assert "pollAudioReady" in html
+
+
+def test_frontend_voice_flow_shows_transcript_before_chat_processing() -> None:
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert 'showTyping("Understanding...")' in html
+    assert 'endpoint: "/api/voice/transcribe"' in html
+    assert 'addMessage("customer", transcribePayload.transcript)' in html
+    assert "addAssistantPlaceholder()" in html
+    assert "logVoiceLatencyTrace" in html
+
+
+def test_frontend_separates_voice_and_text_response_delivery() -> None:
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert "RESPONSE_STATES" in html
+    assert "handleVoiceApiResponse" in html
+    assert "handleApiResponse(await response.json())" in html
+    assert "await handleVoiceApiResponse(chatPayload" in html
+
+
+def test_frontend_voice_final_text_waits_for_audio_ready() -> None:
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    voice_handler_start = html.index("async function handleVoiceApiResponse")
+    poll_index = html.index("await pollAudioReady(pendingAudioUrl, payload)", voice_handler_start)
+    render_index = html.index("updateAssistantMessage(placeholderMessage, payload.response_text", voice_handler_start)
+    play_index = html.index("await playResponseAudio(readyAudioUrl, playbackPayload)", voice_handler_start)
+
+    assert poll_index < render_index
+    assert render_index < play_index
+
+
+def test_frontend_voice_failure_replaces_placeholder() -> None:
+    html = INDEX_HTML.read_text(encoding="utf-8")
+
+    assert "AUDIO_FAILED" in html
+    assert "updateAssistantMessage(assistantPlaceholder, copyFor(\"genericTextError\"))" in html
+    assert "showToast(payload.audio_error || copyFor(\"audioUnavailable\", payload))" in html
 
 
 def test_frontend_does_not_expose_internal_agent_terms() -> None:

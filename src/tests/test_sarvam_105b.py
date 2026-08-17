@@ -123,7 +123,9 @@ def test_prompt_contains_safety_guardrails() -> None:
     prompt = "\n".join(message["content"] for message in messages)
     assert "Do not invent missing information" in prompt
     assert "Use null for information not provided" in prompt
-    assert "Extract only information explicitly stated" in prompt
+    assert "Extract only claim facts explicitly stated" in prompt
+    assert "Temporal expressions are not locations" in prompt
+    assert "Location expressions are not times" in prompt
     assert "Collision or accident alone does not mean another vehicle or person was involved" in prompt
     assert "Do not decide insurance coverage" in prompt
     assert "Do not approve, reject, create, or escalate claims" in prompt
@@ -163,11 +165,86 @@ def test_customer_response_prompt_uses_controlled_workflow_context() -> None:
     user_prompt = messages[1]["content"]
     assert "Use the provided deterministic workflow state as the only source of allowed business action" in system_prompt
     assert "Do not say a claim is registered unless claim_status is INITIATED" in system_prompt
+    assert "Do not disclose customer-specific policy, vehicle, coverage, claim, or document information" in system_prompt
+    assert "If identity_mismatch is true, only provide identity verification assistance" in system_prompt
     assert "Not really, but I got a broken leg." in user_prompt
     assert "HUMAN_REVIEW" in user_prompt
     assert "injury_reported" in user_prompt
     assert "route_history" not in user_prompt
     assert "check_coverage" not in user_prompt
+
+
+def test_customer_response_prompt_hides_private_policy_context_until_identity_confirmed() -> None:
+    messages = build_customer_response_messages(
+        customer_text="Yes, you are speaking with Adish Kumar.",
+        state={
+            "customer_name": "Rajesh Kumar",
+            "policy_id": "POL10001",
+            "policy_status": "ACTIVE",
+            "policy_type": "Comprehensive",
+            "vehicle_name": "Hyundai Creta",
+            "vehicle_registration": "MH01AB1234",
+            "identity_confirmed": False,
+            "identity_mismatch": False,
+            "workflow_status": "CUSTOMER_IDENTIFIED",
+            "claim_id": "CLM2026000001",
+            "claim_status": "INITIATED",
+            "required_documents": [{"name": "FIR"}],
+            "incident_location": "Andheri",
+        },
+        raw_extraction=None,
+        normalized_extraction=None,
+        fallback_response="May I confirm that I'm speaking with Rajesh Kumar?",
+        response_language="en",
+    )
+
+    payload = json.loads(messages[1]["content"])
+    workflow_state = payload["workflow_state"]
+    assert workflow_state["customer_name"] == "Rajesh Kumar"
+    assert workflow_state["identity_confirmed"] is False
+    assert workflow_state["incident_location"] == "Andheri"
+    assert "policy_id" not in workflow_state
+    assert "policy_status" not in workflow_state
+    assert "vehicle_name" not in workflow_state
+    assert "vehicle_registration" not in workflow_state
+    assert "claim_id" not in workflow_state
+    assert "claim_status" not in workflow_state
+    assert "required_documents" not in workflow_state
+
+
+def test_customer_response_prompt_hides_customer_context_after_identity_mismatch() -> None:
+    messages = build_customer_response_messages(
+        customer_text="Yes, you are speaking with Adish Kumar.",
+        state={
+            "customer_name": "Rajesh Kumar",
+            "speaker_claimed_name": "Adish Kumar",
+            "policy_id": "POL10001",
+            "policy_status": "ACTIVE",
+            "vehicle_name": "Hyundai Creta",
+            "vehicle_registration": "MH01AB1234",
+            "identity_confirmed": False,
+            "identity_mismatch": True,
+            "workflow_status": "IDENTITY_MISMATCH",
+            "next_action": "MANUAL_IDENTITY_VERIFICATION",
+        },
+        raw_extraction=None,
+        normalized_extraction=None,
+        fallback_response="For your security, I cannot share policy information for this mobile number.",
+        response_language="en",
+    )
+
+    payload = json.loads(messages[1]["content"])
+    workflow_state = payload["workflow_state"]
+    assert workflow_state == {
+        "identity_confirmed": False,
+        "identity_mismatch": True,
+        "speaker_claimed_name": "Adish Kumar",
+        "workflow_status": "IDENTITY_MISMATCH",
+        "next_action": "MANUAL_IDENTITY_VERIFICATION",
+    }
+    assert "Rajesh Kumar" not in json.dumps(workflow_state)
+    assert "POL10001" not in json.dumps(workflow_state)
+    assert "Hyundai Creta" not in json.dumps(workflow_state)
 
 
 def test_customer_response_generation_calls_sarvam_105b() -> None:
@@ -250,8 +327,7 @@ def test_tyre_damage_hinglish_text_populates_vehicle_damage() -> None:
         reference_date=date(2026, 8, 12),
     )
 
-    assert extraction.vehicle_damage is not None
-    assert "टायर" in extraction.vehicle_damage
+    assert extraction.vehicle_damage == "tyre damage"
 
 
 def test_minor_tyre_damage_sentence_populates_vehicle_damage() -> None:
@@ -273,8 +349,63 @@ def test_minor_tyre_damage_sentence_populates_vehicle_damage() -> None:
         reference_date=date(2026, 8, 12),
     )
 
-    assert extraction.vehicle_damage is not None
-    assert "टायर" in extraction.vehicle_damage
+    assert extraction.vehicle_damage == "tyre damage"
+
+
+def test_hindi_bumper_damage_normalizes_to_english_canonical_value() -> None:
+    extraction = normalize_claim_extraction(
+        "बम्पर पर डेंट है।",
+        ClaimExtraction.model_validate(
+            {
+                "intent": "motor_claim",
+                "incident_date": None,
+                "incident_time": None,
+                "incident_location": None,
+                "incident_type": None,
+                "vehicle_damage": None,
+                "third_party_involved": None,
+                "injury_reported": None,
+                "vehicle_drivable": None,
+            }
+        ),
+        reference_date=date(2026, 8, 12),
+    )
+
+    assert extraction.vehicle_damage == "bumper dent"
+
+
+def test_rear_bumper_damage_normalizes_to_specific_canonical_value() -> None:
+    extraction = normalize_claim_extraction(
+        "Another car hit my rear bumper.",
+        ClaimExtraction.model_validate(
+            {
+                "intent": "motor_claim",
+                "incident_date": None,
+                "incident_time": None,
+                "incident_location": None,
+                "incident_type": None,
+                "vehicle_damage": "rear bumper damage",
+                "third_party_involved": None,
+                "injury_reported": None,
+                "vehicle_drivable": None,
+            }
+        ),
+        reference_date=date(2026, 8, 12),
+    )
+
+    assert extraction.vehicle_damage == "rear bumper dent"
+
+
+def test_rear_bumper_hit_extracts_damage_without_damage_word() -> None:
+    extraction = normalize_claim_extraction(
+        "Another car hit my rear bumper.",
+        claim_extraction_with(),
+        reference_date=date(2026, 8, 17),
+    )
+
+    assert extraction.incident_type == "collision"
+    assert extraction.third_party_involved is True
+    assert extraction.vehicle_damage == "rear bumper dent"
 
 
 def test_observed_accident_text_extracts_core_facts_without_inventing_location() -> None:
@@ -577,6 +708,147 @@ def test_unsupported_model_fields_are_cleared_to_null() -> None:
     assert extraction.third_party_involved is None
     assert extraction.injury_reported is None
     assert extraction.vehicle_drivable is None
+
+
+def test_yesterday_accident_does_not_invent_time_or_location() -> None:
+    extraction = normalize_claim_extraction(
+        "I met with an accident yesterday.",
+        claim_extraction_with(incident_time="20:00", incident_location="night"),
+        reference_date=date(2026, 8, 17),
+    )
+
+    assert extraction.incident_date == "2026-08-16"
+    assert extraction.incident_time is None
+    assert extraction.incident_location is None
+    assert extraction.vehicle_damage is None
+    assert extraction.third_party_involved is None
+    assert extraction.injury_reported is None
+    assert extraction.vehicle_drivable is None
+
+
+def test_time_does_not_become_location() -> None:
+    extraction = normalize_claim_extraction(
+        "It happened around 8 PM.",
+        claim_extraction_with(incident_location="8 PM"),
+        reference_date=date(2026, 8, 17),
+    )
+
+    assert extraction.incident_time == "20:00"
+    assert extraction.incident_location is None
+
+
+def test_location_does_not_become_time() -> None:
+    extraction = normalize_claim_extraction(
+        "It happened near Dwarka.",
+        claim_extraction_with(incident_time="Dwarka"),
+        reference_date=date(2026, 8, 17),
+    )
+
+    assert extraction.incident_time is None
+    assert extraction.incident_location == "Dwarka"
+
+
+def test_night_is_temporal_context_not_location() -> None:
+    extraction = normalize_claim_extraction(
+        "It happened at night.",
+        claim_extraction_with(incident_location="night"),
+        reference_date=date(2026, 8, 17),
+    )
+
+    assert extraction.incident_time == "night"
+    assert extraction.incident_location is None
+    assert extraction.additional_details == "time period: night"
+
+
+def test_dwarka_location_extraction() -> None:
+    extraction = normalize_claim_extraction(
+        "It happened near Dwarka.",
+        claim_extraction_with(),
+        reference_date=date(2026, 8, 17),
+    )
+
+    assert extraction.incident_location == "Dwarka"
+    assert extraction.incident_time is None
+
+
+def test_eight_pm_at_night_near_dwarka_extracts_time_and_place() -> None:
+    extraction = normalize_claim_extraction(
+        "It happened around 8 PM at night near Dwarka.",
+        claim_extraction_with(incident_location="night"),
+        reference_date=date(2026, 8, 17),
+    )
+
+    assert extraction.incident_time == "20:00"
+    assert extraction.incident_location == "Dwarka"
+    assert extraction.additional_details == "time period: night"
+
+
+def test_hinglish_hindi_baje_and_delhi_extracts_time_and_location() -> None:
+    extraction = normalize_claim_extraction(
+        "मेरी car का accident कल शाम around 7 बजे दिल्ली में हुआ",
+        claim_extraction_with(),
+        reference_date=date(2026, 8, 17),
+    )
+
+    assert extraction.incident_date == "2026-08-16"
+    assert extraction.incident_time == "19:00"
+    assert extraction.incident_location == "Delhi"
+    assert extraction.incident_type == "accident"
+    assert extraction.additional_details == "time period: evening"
+
+
+def test_office_context_near_dwarka_keeps_dwarka_as_location() -> None:
+    extraction = normalize_claim_extraction(
+        "I was coming out of my office near Dwarka at around 8 PM.",
+        claim_extraction_with(),
+        reference_date=date(2026, 8, 17),
+    )
+
+    assert extraction.incident_time == "20:00"
+    assert extraction.incident_location == "Dwarka"
+    assert extraction.additional_details == "coming out of office"
+
+
+def test_yesterday_evening_near_andheri_does_not_fabricate_clock_time() -> None:
+    extraction = normalize_claim_extraction(
+        "It happened near Andheri yesterday evening.",
+        claim_extraction_with(incident_time="18:00"),
+        reference_date=date(2026, 8, 17),
+    )
+
+    assert extraction.incident_date == "2026-08-16"
+    assert extraction.incident_time == "evening"
+    assert extraction.incident_location == "Andheri"
+    assert extraction.additional_details == "time period: evening"
+
+
+def test_last_night_bumper_damage_has_no_location() -> None:
+    extraction = normalize_claim_extraction(
+        "Last night my bumper was damaged.",
+        claim_extraction_with(incident_location="night"),
+        reference_date=date(2026, 8, 17),
+    )
+
+    assert extraction.incident_date == "2026-08-16"
+    assert extraction.incident_time == "night"
+    assert extraction.incident_location is None
+    assert extraction.vehicle_damage == "bumper dent"
+
+
+def test_specific_location_correction_wins_after_validation() -> None:
+    first = normalize_claim_extraction(
+        "It happened near Dwarka.",
+        claim_extraction_with(),
+        reference_date=date(2026, 8, 17),
+    )
+    corrected = normalize_claim_extraction(
+        "Actually it was near Janakpuri.",
+        claim_extraction_with(incident_location=first.incident_location),
+        reference_date=date(2026, 8, 17),
+    )
+
+    assert first.incident_location == "Dwarka"
+    assert corrected.incident_location == "Janakpuri"
 
 
 def test_missing_api_key_raises_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:

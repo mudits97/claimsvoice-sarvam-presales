@@ -13,14 +13,23 @@ from fastapi.testclient import TestClient
 from app import main
 from app.customer_experience import (
     SESSIONS,
+    _captured_summary,
+    _claim_summary,
     detect_conversation_language,
     process_chat_message,
     process_voice_message,
+    render_session_view,
     reset_session,
     specific_missing_field_question,
 )
 from app.rules import missing_required_state_fields
-from app.sarvam import ClaimExtraction, SarvamSpeechError, SpeechSynthesisResult, TranscriptionResult
+from app.sarvam import (
+    ClaimExtraction,
+    SarvamExtractionError,
+    SarvamSpeechError,
+    SpeechSynthesisResult,
+    TranscriptionResult,
+)
 from app.state import build_initial_state
 from app.tools import get_customer
 
@@ -227,8 +236,8 @@ def test_chat_happy_path_returns_claim_confirmation(experience_data_dir: Path) -
     assert summary_items["ग्राहक"] == "Rajesh Kumar"
     assert summary_items["पॉलिसी क्रमांक"] == "POL10001"
     assert summary_items["दुर्घटना की तारीख"] == (date.today() - timedelta(days=1)).isoformat()
-    assert summary_items["दुर्घटना का समय"] == "19:00"
-    assert summary_items["स्थान"] == "Andheri"
+    assert summary_items["दुर्घटना का समय"] == "evening"
+    assert summary_items["स्थान"] == "अंधेरी"
     assert summary_items["घटना का प्रकार"] == "वाहन दुर्घटना"
     assert summary_items["वाहन का नुकसान"] == "बम्पर पर डेंट"
     assert summary_items["किसी को चोट"] == "नहीं"
@@ -243,8 +252,11 @@ def test_chat_happy_path_returns_claim_confirmation(experience_data_dir: Path) -
     assert stored_claim["claim_id"] == result["claim_id"]
     assert summary_items["दुर्घटना की तारीख"] == stored_claim["incident"]["date"]
     assert summary_items["दुर्घटना का समय"] == stored_claim["incident"]["time"]
-    assert summary_items["स्थान"] == stored_claim["incident"]["location"]
-    assert summary_items["वाहन का नुकसान"] == stored_claim["incident"]["vehicle_damage"]
+    assert stored_claim["incident"]["location"] == "Andheri"
+    assert summary_items["वाहन का नुकसान"] == "बम्पर पर डेंट"
+    assert stored_claim["incident"]["vehicle_damage"] == "bumper dent"
+    assert stored_claim["incident"]["vehicle_damage_code"] == "BUMPER_DENT"
+    assert stored_claim["incident"]["vehicle_damage_raw_evidence"] == "bumper damage"
 
 
 def test_chat_human_review_is_customer_safe(experience_data_dir: Path) -> None:
@@ -270,7 +282,7 @@ def test_chat_human_review_is_customer_safe(experience_data_dir: Path) -> None:
     assert result["claim_summary"]["reference_value"] == result["claim_id"]
     summary_items = flattened_summary_items(result["claim_summary"])
     assert summary_items["ग्राहक"] == "Kavya Nair"
-    assert summary_items["स्थान"] == "Koramangala"
+    assert summary_items["स्थान"] == "कोरमंगला"
     assert summary_items["किसी को चोट"] == "हाँ"
     assert summary_items["दावे की स्थिति"] == "विशेषज्ञ समीक्षा आवश्यक"
     assert "दावा क्रमांक" not in str(result["claim_summary"])
@@ -466,7 +478,7 @@ def test_live_captured_summary_updates_after_each_turn_and_retains_values(
     )
     location_items = captured_summary_items(location)
     assert location_items["दुर्घटना का समय"] == "00:00"
-    assert location_items["स्थान"] == "office के बाहर"
+    assert location_items["स्थान"] == "ऑफिस के बाहर"
 
     damage = process_chat_message(
         message="गाड़ी में कुछ ज्यादा नुकसान नहीं हुआ but मेरा 1 टायर टूट गया",
@@ -476,7 +488,7 @@ def test_live_captured_summary_updates_after_each_turn_and_retains_values(
         speech_synthesizer=fake_audio,
     )
     damage_items = captured_summary_items(damage)
-    assert damage_items["स्थान"] == "office के बाहर"
+    assert damage_items["स्थान"] == "ऑफिस के बाहर"
     assert damage_items["वाहन का नुकसान"] == "एक टायर क्षतिग्रस्त"
     assert "किसी को चोट" not in damage_items
 
@@ -519,6 +531,194 @@ def test_live_captured_summary_uses_english_labels(experience_data_dir: Path) ->
     assert items["Incident location"] == "near the office"
     assert items["Incident type"] == "Collision"
     assert "Injury reported" not in items
+
+
+def test_invalid_temporal_location_is_rejected_before_summary(
+    experience_data_dir: Path,
+) -> None:
+    result = process_chat_message(
+        message="I met with an accident yesterday.",
+        mobile_number="9876543217",
+        session_id="temporal-location-rejected",
+        language="en-IN",
+        extractor=lambda _text, **_kwargs: empty_extraction(
+            incident_date=(date.today() - timedelta(days=1)).isoformat(),
+            incident_time="20:00",
+            incident_location="night",
+            incident_type="accident",
+        ),
+        speech_synthesizer=fake_audio,
+    )
+
+    state = SESSIONS["temporal-location-rejected"]
+    items = captured_summary_items(result)
+    assert state["incident_date"] == (date.today() - timedelta(days=1)).isoformat()
+    assert state["incident_time"] is None
+    assert state["incident_location"] is None
+    assert "Incident date" in items
+    assert "Incident time" not in items
+    assert "Incident location" not in items
+    assert "night" not in json.dumps(result["captured_summary"], ensure_ascii=False).lower()
+
+
+def test_validated_dwarka_time_and_context_reach_summary(
+    experience_data_dir: Path,
+) -> None:
+    result = process_chat_message(
+        message="The accident happened around 8 PM in night near Dwarka when I was coming out of my office.",
+        mobile_number="9876543217",
+        session_id="dwarka-time-summary",
+        language="en-IN",
+        extractor=lambda _text, **_kwargs: empty_extraction(
+            incident_time="20:00",
+            incident_location="night",
+            incident_type="accident",
+        ),
+        speech_synthesizer=fake_audio,
+    )
+
+    state = SESSIONS["dwarka-time-summary"]
+    items = captured_summary_items(result)
+    assert state["incident_time"] == "20:00"
+    assert state["incident_location"] == "Dwarka"
+    assert state["additional_details"] == "time period: night; coming out of office"
+    assert items["Incident time"] == "20:00"
+    assert items["Incident location"] == "Dwarka"
+    assert items["Incident location"] != "night"
+
+
+def test_location_correction_updates_claim_state_after_validation(
+    experience_data_dir: Path,
+) -> None:
+    session_id = "location-correction"
+    SESSIONS[session_id] = ready_incident_state(incident_location="Dwarka")
+
+    result = process_chat_message(
+        message="Actually it was near Janakpuri.",
+        mobile_number="9876543210",
+        session_id=session_id,
+        language="en-IN",
+        extractor=lambda _text, **_kwargs: empty_extraction(incident_location="Dwarka"),
+        speech_synthesizer=fake_audio,
+    )
+
+    items = captured_summary_items(result)
+    assert SESSIONS[session_id]["incident_location"] == "Janakpuri"
+    assert items["Incident location"] == "Janakpuri"
+
+
+def test_vehicle_damage_summary_localizes_raw_hindi_evidence(
+    experience_data_dir: Path,
+) -> None:
+    session_id = "localized-damage-summary"
+    SESSIONS[session_id] = ready_incident_state(
+        vehicle_damage=None,
+        next_missing_field="vehicle_damage",
+        last_requested_field="vehicle_damage",
+    )
+
+    result = process_chat_message(
+        message="बम्पर पर डेंट है।",
+        mobile_number="9876543210",
+        session_id=session_id,
+        language="en-IN",
+        extractor=lambda _text: empty_extraction(),
+        speech_synthesizer=fake_audio,
+    )
+
+    state = SESSIONS[session_id]
+    assert state["vehicle_damage"] == "bumper dent"
+    assert state["vehicle_damage_code"] == "BUMPER_DENT"
+    assert state["vehicle_damage_raw_evidence"] == "बम्पर पर डेंट"
+    assert result["claim_summary"]["title"] == "Claim Summary"
+    assert flattened_summary_items(result["claim_summary"])["Vehicle damage"] == "Bumper dent"
+
+    state["ui_language"] = "en"
+    english_items = captured_summary_items({"captured_summary": _captured_summary(state)})
+    assert english_items["Vehicle damage"] == "Bumper dent"
+    assert "बम्पर" not in english_items["Vehicle damage"]
+
+    state["ui_language"] = "hi"
+    hindi_items = captured_summary_items({"captured_summary": _captured_summary(state)})
+    assert hindi_items["वाहन का नुकसान"] == "बम्पर पर डेंट"
+    assert state["vehicle_damage_raw_evidence"] == "बम्पर पर डेंट"
+
+
+def test_structured_summary_values_follow_selected_language() -> None:
+    state = ready_incident_state(
+        incident_location="office के बाहर",
+        incident_type="collision",
+        vehicle_damage="tyre damage",
+        vehicle_damage_code="TYRE_DAMAGE",
+        vehicle_damage_raw_evidence="एक टायर क्षतिग्रस्त",
+        third_party_involved=True,
+        injury_reported=False,
+        vehicle_drivable=False,
+        workflow_status="HUMAN_REVIEW",
+        claim_status="HUMAN_REVIEW",
+        claim_id="CLM2026000999",
+        next_action="Claims specialist review",
+    )
+
+    state["ui_language"] = "en"
+    english_items = captured_summary_items({"captured_summary": _captured_summary(state)})
+    assert english_items["Incident location"] == "Outside the office"
+    assert english_items["Incident type"] == "Collision"
+    assert english_items["Vehicle damage"] == "Tyre damage"
+    assert english_items["Third-party involvement"] == "Yes"
+    assert english_items["Injury reported"] == "No"
+    assert english_items["Vehicle driveable"] == "No"
+    english_claim_items = flattened_summary_items(_claim_summary(state))
+    assert english_claim_items["Claim status"] == "Specialist review required"
+
+    state["ui_language"] = "hi"
+    hindi_items = captured_summary_items({"captured_summary": _captured_summary(state)})
+    assert hindi_items["स्थान"] == "ऑफिस के बाहर"
+    assert hindi_items["घटना का प्रकार"] == "वाहन टक्कर"
+    assert hindi_items["वाहन का नुकसान"] == "एक टायर क्षतिग्रस्त"
+    assert hindi_items["दूसरी गाड़ी/व्यक्ति शामिल"] == "हाँ"
+    assert hindi_items["किसी को चोट"] == "नहीं"
+    assert hindi_items["गाड़ी चलने की स्थिति में"] == "नहीं"
+    hindi_claim_items = flattened_summary_items(_claim_summary(state))
+    assert hindi_claim_items["दावे की स्थिति"] == "विशेषज्ञ समीक्षा आवश्यक"
+    assert state["incident_location"] == "office के बाहर"
+    assert state["vehicle_damage"] == "tyre damage"
+
+
+def test_session_view_language_switch_changes_presentation_only() -> None:
+    session_id = "language-switch-view"
+    SESSIONS[session_id] = ready_incident_state(
+        incident_location="Dwarka",
+        incident_type="collision",
+        vehicle_damage="rear bumper dent",
+        vehicle_damage_code="REAR_BUMPER_DENT",
+        vehicle_damage_raw_evidence="rear bumper damage",
+        third_party_involved=True,
+        injury_reported=False,
+        vehicle_drivable=True,
+        workflow_status="MISSING_INFORMATION",
+        claim_status="",
+    )
+
+    english = render_session_view(session_id, "en-IN")
+    english_items = captured_summary_items(english)
+    assert english["ui_language"] == "en"
+    assert english_items["Incident type"] == "Collision"
+    assert english_items["Vehicle damage"] == "Rear bumper dent"
+    assert english_items["Third-party involvement"] == "Yes"
+
+    hindi = render_session_view(session_id, "hi-IN")
+    hindi_items = captured_summary_items(hindi)
+    assert hindi["ui_language"] == "hi"
+    assert hindi_items["घटना का प्रकार"] == "वाहन टक्कर"
+    assert hindi_items["वाहन का नुकसान"] == "पिछले बम्पर पर डेंट"
+    assert hindi_items["दूसरी गाड़ी/व्यक्ति शामिल"] == "हाँ"
+
+    english_again = render_session_view(session_id, "en-IN")
+    english_again_items = captured_summary_items(english_again)
+    assert english_again_items["Vehicle damage"] == "Rear bumper dent"
+    assert SESSIONS[session_id]["vehicle_damage"] == "rear bumper dent"
+    assert SESSIONS[session_id]["vehicle_damage_raw_evidence"] == "rear bumper damage"
 
 
 def test_policy_number_is_not_unnecessarily_requested(
@@ -566,10 +766,15 @@ def test_identity_mismatch_prevents_policy_disclosure(
 
     assert result["claim_status"] == "IDENTITY_MISMATCH"
     assert SESSIONS["identity-mismatch"]["identity_mismatch"] is True
-    assert SESSIONS["identity-mismatch"]["customer_name"] == ""
+    assert SESSIONS["identity-mismatch"]["customer_name"] == "Rajesh Kumar"
     assert SESSIONS["identity-mismatch"]["policy_status"] == ""
     assert "Rajesh" not in result["response_text"]
     assert "बीमा पॉलिसी की जानकारी साझा नहीं" in result["response_text"]
+    summary_text = json.dumps(result["captured_summary"], ensure_ascii=False)
+    assert "पहचान सत्यापन आवश्यक" in summary_text
+    assert "Rajesh" not in summary_text
+    assert "POL10001" not in summary_text
+    assert "Hyundai" not in summary_text
 
 
 def test_identity_mismatch_from_different_name_does_not_repeat_prompt(
@@ -601,6 +806,79 @@ def test_identity_mismatch_from_different_name_does_not_repeat_prompt(
     assert "May I confirm" not in result["response_text"]
 
 
+def test_identity_mismatch_exact_adish_case_blocks_policy_disclosure(
+    experience_data_dir: Path,
+) -> None:
+    process_chat_message(
+        message=(
+            "Hello. I met with an accident yesterday around 8 PM near Andheri. "
+            "Another car hit my rear bumper."
+        ),
+        mobile_number="9876543210",
+        session_id="identity-adish-exact",
+        language="en-IN",
+        extractor=lambda _text: extraction(),
+        speech_synthesizer=fake_audio,
+    )
+
+    result = process_chat_message(
+        message="Yes, you are speaking with Adish Kumar.",
+        mobile_number="9876543210",
+        session_id="identity-adish-exact",
+        language="en-IN",
+        extractor=lambda _text: empty_extraction(),
+        speech_synthesizer=fake_audio,
+    )
+
+    state = SESSIONS["identity-adish-exact"]
+    assert state["customer_name"] == "Rajesh Kumar"
+    assert state["speaker_claimed_name"] == "Adish Kumar"
+    assert state["identity_confirmed"] is False
+    assert state["identity_mismatch"] is True
+    assert state["workflow_status"] == "IDENTITY_MISMATCH"
+    assert state["policy_status"] == ""
+    assert "retrieve_policy" not in state["route_history"]
+    assert "check_coverage" not in state["route_history"]
+    assert "create_claim" not in state["route_history"]
+
+    response_and_panel = result["response_text"] + json.dumps(result["captured_summary"], ensure_ascii=False)
+    assert "Adish" not in result["response_text"]
+    assert "Rajesh" not in result["response_text"]
+    assert "POL10001" not in response_and_panel
+    assert "Hyundai" not in response_and_panel
+    assert result["captured_summary"]["title"] == "Identity verification required"
+
+
+def test_identity_mismatch_relation_statement_does_not_confirm_customer(
+    experience_data_dir: Path,
+) -> None:
+    process_chat_message(
+        message="My car was in an accident near Andheri.",
+        mobile_number="9876543210",
+        session_id="identity-father-owner",
+        language="en-IN",
+        extractor=lambda _text: extraction(),
+        speech_synthesizer=fake_audio,
+    )
+
+    result = process_chat_message(
+        message="My father Rajesh owns the car, but I'm Adish.",
+        mobile_number="9876543210",
+        session_id="identity-father-owner",
+        language="en-IN",
+        extractor=lambda _text: empty_extraction(),
+        speech_synthesizer=fake_audio,
+    )
+
+    state = SESSIONS["identity-father-owner"]
+    assert state["identity_confirmed"] is False
+    assert state["identity_mismatch"] is True
+    assert state["speaker_claimed_name"] == "Adish"
+    assert state["policy_status"] == ""
+    assert "Rajesh" not in result["response_text"]
+    assert "Hyundai" not in result["response_text"]
+
+
 def test_identity_success_that_is_me_progresses_to_missing_field(
     experience_data_dir: Path,
 ) -> None:
@@ -628,6 +906,36 @@ def test_identity_success_that_is_me_progresses_to_missing_field(
     assert result["claim_status"] == "MISSING_INFORMATION"
     assert "May I confirm" not in result["response_text"]
     assert state["last_requested_field"] == "incident_date"
+
+
+def test_identity_success_full_registered_name_progresses_to_policy(
+    experience_data_dir: Path,
+) -> None:
+    process_chat_message(
+        message="My car was in an accident.",
+        mobile_number="9876543210",
+        session_id="identity-full-name",
+        language="en-IN",
+        extractor=lambda _text: empty_extraction(),
+        speech_synthesizer=fake_audio,
+    )
+
+    result = process_chat_message(
+        message="I am Rajesh Kumar.",
+        mobile_number="9876543210",
+        session_id="identity-full-name",
+        language="en-IN",
+        extractor=lambda _text: empty_extraction(),
+        speech_synthesizer=fake_audio,
+    )
+
+    state = SESSIONS["identity-full-name"]
+    assert state["identity_confirmed"] is True
+    assert state["identity_mismatch"] is False
+    assert state["speaker_claimed_name"] == "Rajesh Kumar"
+    assert state["policy_status"] == "ACTIVE"
+    assert "retrieve_policy" in state["route_history"]
+    assert result["claim_status"] == "MISSING_INFORMATION"
 
 
 def test_claim_success_uses_customer_name_and_generated_claim_id(
@@ -817,6 +1125,7 @@ def test_english_user_receives_english_response(experience_data_dir: Path) -> No
         message="My car was in an accident",
         mobile_number="9876543210",
         session_id="english-language",
+        language="en-IN",
         extractor=lambda _text: extraction(
             incident_date=None,
             incident_time=None,
@@ -831,6 +1140,122 @@ def test_english_user_receives_english_response(experience_data_dir: Path) -> No
 
     assert result["response_language"] == "en"
     assert result["response_text"] == "Hello Rajesh. May I confirm that I'm speaking with Rajesh Kumar?"
+    assert result["captured_summary"]["title"] == "Information captured so far"
+
+
+def test_exact_english_yesterday_8pm_message_processes_without_generic_error(
+    experience_data_dir: Path,
+) -> None:
+    result = process_chat_message(
+        message="Hey, I met an accident yesterday around 8 PM.",
+        mobile_number="9876543210",
+        session_id="urgent-english-exact",
+        language="en-IN",
+        extractor=lambda _text, **_kwargs: empty_extraction(),
+        response_generator=None,
+        speech_synthesizer=fake_audio,
+    )
+
+    state = SESSIONS["urgent-english-exact"]
+    items = captured_summary_items(result)
+    assert result["success"] is True
+    assert result["response_language"] == "en"
+    assert "trouble processing" not in result["response_text"].lower()
+    assert state["incident_date"] == (date.today() - timedelta(days=1)).isoformat()
+    assert state["incident_time"] == "20:00"
+    assert state["incident_location"] is None
+    assert state["vehicle_damage"] is None
+    assert state["third_party_involved"] is None
+    assert state["injury_reported"] is None
+    assert state["vehicle_drivable"] is None
+    assert items["Incident date"] == (date.today() - timedelta(days=1)).isoformat()
+    assert items["Incident time"] == "20:00"
+    assert "Incident location" not in items
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        (
+            "I met with an accident yesterday.",
+            {"incident_date": (date.today() - timedelta(days=1)).isoformat()},
+        ),
+        ("I met with an accident yesterday around 8 PM.", {"incident_time": "20:00"}),
+        ("The accident happened near Dwarka.", {"incident_location": "Dwarka"}),
+        (
+            "Another car hit my rear bumper.",
+            {
+                "third_party_involved": True,
+                "vehicle_damage": "rear bumper dent",
+            },
+        ),
+        ("No one was injured.", {"injury_reported": False}),
+        ("Yes, the car can still be driven.", {"vehicle_drivable": True}),
+    ],
+)
+def test_english_partial_fact_messages_continue_without_processing_error(
+    experience_data_dir: Path,
+    message: str,
+    expected: dict[str, Any],
+) -> None:
+    result = process_chat_message(
+        message=message,
+        mobile_number="9876543210",
+        session_id=f"english-regression-{abs(hash(message))}",
+        language="en-IN",
+        extractor=lambda _text, **_kwargs: empty_extraction(),
+        response_generator=None,
+        speech_synthesizer=fake_audio,
+    )
+
+    state = SESSIONS[result["session_id"]]
+    assert result["success"] is True
+    assert "trouble processing" not in result["response_text"].lower()
+    for key, value in expected.items():
+        assert state[key] == value
+
+
+def test_full_english_claim_journey_completes_without_processing_error(
+    experience_data_dir: Path,
+) -> None:
+    session_id = "urgent-english-full-journey"
+    turns = [
+        "Hey, I met an accident yesterday around 8 PM.",
+        "Yes, this is Rajesh Kumar.",
+        "The accident happened near Andheri.",
+        "Another car hit my rear bumper.",
+        "No one was injured.",
+        "Yes, the car can still be driven.",
+    ]
+    result: dict[str, Any] = {}
+
+    for message in turns:
+        result = process_chat_message(
+            message=message,
+            mobile_number="9876543210",
+            session_id=session_id,
+            language="en-IN",
+            extractor=lambda _text, **_kwargs: empty_extraction(),
+            response_generator=None,
+            speech_synthesizer=fake_audio,
+        )
+        assert result["success"] is True
+        assert "trouble processing" not in result["response_text"].lower()
+
+    state = SESSIONS[session_id]
+    items = flattened_summary_items(result["claim_summary"])
+    assert state["identity_confirmed"] is True
+    assert state["incident_date"] == (date.today() - timedelta(days=1)).isoformat()
+    assert state["incident_time"] == "20:00"
+    assert state["incident_location"] == "Andheri"
+    assert state["vehicle_damage"] == "rear bumper dent"
+    assert state["third_party_involved"] is True
+    assert state["injury_reported"] is False
+    assert state["vehicle_drivable"] is True
+    assert result["claim_status"] == "INITIATED"
+    assert result["claim_id"].startswith("CLM2026")
+    assert items["Incident location"] == "Andheri"
+    assert items["Vehicle damage"] == "Rear bumper dent"
 
 
 def test_bulbul_receives_exact_displayed_text_and_language_code(
@@ -902,6 +1327,49 @@ def test_hinglish_user_receives_hindi_response(experience_data_dir: Path) -> Non
     assert result["response_language"] == "hi"
     assert "पुष्टि" in result["response_text"]
     assert_hindi_response(result["response_text"])
+
+
+def test_english_selected_hinglish_input_keeps_english_ui_and_response(
+    experience_data_dir: Path,
+) -> None:
+    result = process_chat_message(
+        message=(
+            "I met with an accident yesterday around 8 PM near Dwarka. "
+            "From somewhere another car hit my rear bumper."
+        ),
+        mobile_number="9876543210",
+        session_id="english-selected-hinglish",
+        language="en-IN",
+        extractor=lambda _text: extraction(
+            incident_date="2026-08-16",
+            incident_time="20:00",
+            incident_location="Dwarka",
+            incident_type="collision",
+            vehicle_damage="rear bumper damage",
+            third_party_involved=True,
+            injury_reported=None,
+            vehicle_drivable=None,
+        ),
+        speech_synthesizer=fake_audio,
+    )
+
+    state = SESSIONS["english-selected-hinglish"]
+    assert result["ui_language"] == "en"
+    assert result["response_language"] == "en"
+    assert state["conversation_language"] == "en"
+    assert state["vehicle_damage"] == "rear bumper dent"
+    assert state["vehicle_damage_code"] == "REAR_BUMPER_DENT"
+    assert result["captured_summary"]["title"] == "Information captured so far"
+    items = captured_summary_items(result)
+    assert items["Customer name"] == "Rajesh Kumar"
+    assert items["Incident date"] == "2026-08-16"
+    assert items["Incident time"] == "20:00"
+    assert items["Incident location"] == "Dwarka"
+    assert items["Incident type"] == "Collision"
+    assert items["Vehicle damage"] == "Rear bumper dent"
+    assert items["Third-party involvement"] == "Yes"
+    assert "अब तक दर्ज जानकारी" not in json.dumps(result["captured_summary"], ensure_ascii=False)
+    assert "वाहन टक्कर" not in json.dumps(result["captured_summary"], ensure_ascii=False)
 
 
 def test_language_persists_across_multiple_turns(experience_data_dir: Path) -> None:
@@ -1286,7 +1754,9 @@ def test_multi_turn_claim_eventually_progresses_to_claim_creation(
         extractor=sequential_extractor,
         speech_synthesizer=fake_audio,
     )
-    assert SESSIONS["multi-turn-hindi"]["vehicle_damage"] == "बम्पर पर डेंट"
+    assert SESSIONS["multi-turn-hindi"]["vehicle_damage"] == "bumper dent"
+    assert SESSIONS["multi-turn-hindi"]["vehicle_damage_code"] == "BUMPER_DENT"
+    assert SESSIONS["multi-turn-hindi"]["vehicle_damage_raw_evidence"] == "हल्का bumper dent"
     assert "नुकसान सीमित है" in fourth["response_text"]
     assert "किसी को चोट" in fourth["response_text"]
     assert_hindi_response(fourth["response_text"])
@@ -1394,7 +1864,9 @@ def test_observed_priya_conversation_keeps_collecting_until_complete(
     )
 
     assert SESSIONS[session_id]["vehicle_damage"] is not None
-    assert "टायर" in SESSIONS[session_id]["vehicle_damage"]
+    assert SESSIONS[session_id]["vehicle_damage"] == "tyre damage"
+    assert SESSIONS[session_id]["vehicle_damage_code"] == "TYRE_DAMAGE"
+    assert SESSIONS[session_id]["vehicle_damage_raw_evidence"] == "एक टायर क्षतिग्रस्त"
     assert "टायर के नुकसान" in damage["response_text"]
     assert "किसी को चोट" in damage["response_text"]
     assert "गाड़ी में क्या नुकसान" not in damage["response_text"]
@@ -1449,6 +1921,7 @@ def test_injury_answer_with_broken_leg_resolves_pending_field(
         message="Not really, but I got a broken leg.",
         mobile_number="9876543210",
         session_id=session_id,
+        language="en-IN",
         extractor=lambda _text: empty_extraction(injury_reported=False),
         speech_synthesizer=fake_audio,
     )
@@ -1476,6 +1949,7 @@ def test_driveability_answer_resolves_pending_field_and_creates_claim(
         message="Yes, car can still be driven.",
         mobile_number="9876543210",
         session_id=session_id,
+        language="en-IN",
         extractor=lambda _text: empty_extraction(),
         speech_synthesizer=fake_audio,
     )
@@ -1504,6 +1978,7 @@ def test_ambiguous_injury_answer_gets_clarification_not_repeat(
         message="Not really.",
         mobile_number="9876543210",
         session_id=session_id,
+        language="en-IN",
         extractor=lambda _text: empty_extraction(),
         speech_synthesizer=fake_audio,
     )
@@ -1577,6 +2052,31 @@ def test_dynamic_response_generator_receives_controlled_workflow_context(
     assert SESSIONS[session_id]["last_requested_field"] == ""
 
 
+def test_identity_confirmation_keeps_deterministic_business_wording(
+    experience_data_dir: Path,
+) -> None:
+    called = False
+
+    def dynamic_response(**_kwargs: Any) -> str:
+        nonlocal called
+        called = True
+        return "Please confirm that the accident details are correct."
+
+    result = process_chat_message(
+        message="My car was in an accident yesterday around 8 PM.",
+        mobile_number="9876543210",
+        session_id="identity-deterministic-response",
+        language="en-IN",
+        extractor=lambda _text: extraction(),
+        response_generator=dynamic_response,
+        speech_synthesizer=fake_audio,
+    )
+
+    assert called is False
+    assert result["claim_status"] == "CUSTOMER_IDENTIFIED"
+    assert result["response_text"] == "Hello Rajesh. May I confirm that I'm speaking with Rajesh Kumar?"
+
+
 def test_missing_information_can_continue_same_session(experience_data_dir: Path) -> None:
     first = process_chat_message(
         message="Accident kal hua tha.",
@@ -1630,6 +2130,37 @@ def test_missing_information_can_continue_same_session(experience_data_dir: Path
     assert second["claim_id"].startswith("CLM2026")
     assert second["claim_status"] == "INITIATED"
     assert len(read_claims(experience_data_dir)) == 1
+
+
+def test_chat_uses_deterministic_extraction_fallback_for_hindi_hinglish_turn(
+    experience_data_dir: Path,
+) -> None:
+    def failing_extractor(_text: str, **_kwargs: Any) -> ClaimExtraction:
+        raise SarvamExtractionError("invalid model response")
+
+    result = process_chat_message(
+        message="मेरी car का accident कल शाम around 7 बजे दिल्ली में हुआ",
+        mobile_number="9876543211",
+        session_id="hindi-hinglish-extraction-fallback",
+        language="hi-IN",
+        extractor=failing_extractor,
+        speech_synthesizer=fake_audio,
+    )
+
+    summary_values = {
+        item["label"]: item["value"]
+        for item in (result["captured_summary"] or {}).get("items", [])
+    }
+
+    assert result["success"] is True
+    assert result["claim_status"] == "CUSTOMER_IDENTIFIED"
+    assert "समझने में परेशानी" not in result["response_text"]
+    assert result["latency_trace"]["sarvam_extraction_fallback"] is True
+    assert summary_values["ग्राहक"] == "Priya Sharma"
+    assert summary_values["दुर्घटना की तारीख"] == (date.today() - timedelta(days=1)).isoformat()
+    assert summary_values["दुर्घटना का समय"] == "19:00"
+    assert summary_values["स्थान"] == "दिल्ली"
+    assert summary_values["घटना का प्रकार"] == "वाहन दुर्घटना"
 
 
 def test_voice_pipeline_transcribes_then_returns_audio(experience_data_dir: Path) -> None:
@@ -1786,6 +2317,63 @@ def test_voice_endpoint_accepts_audio_upload(
     assert response.json()["transcript"].startswith("Meri car")
     assert response.json()["audio_url"] == "/media/audio/fake.mp3"
     assert (debug_dir / "browser_test.webm").read_bytes() == b"voice-bytes"
+
+
+def test_voice_transcribe_endpoint_returns_transcript_before_chat(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    experience_data_dir: Path,
+) -> None:
+    def fake_transcribe_audio_bytes(audio_bytes: bytes, **kwargs: Any) -> TranscriptionResult:
+        assert audio_bytes == b"voice-bytes"
+        return TranscriptionResult(
+            transcript="My car was in an accident.",
+            language_code="en-IN",
+            metadata={},
+        )
+
+    monkeypatch.setattr(main, "transcribe_audio_bytes", fake_transcribe_audio_bytes)
+    debug_dir = experience_data_dir / "debug_audio"
+    monkeypatch.setattr(main, "DEBUG_AUDIO_DIR", debug_dir)
+
+    response = client.post(
+        "/api/voice/transcribe",
+        data={"mobile_number": "9876543210", "session_id": "voice-transcribe", "language": "en-IN"},
+        files={"audio": ("browser_recording.webm", b"voice-bytes", "audio/webm;codecs=opus")},
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["transcript"] == "My car was in an accident."
+    assert payload["detected_language"] == "en-IN"
+    assert payload["latency_trace"]["saaras_stt_ms"] >= 0
+    assert (debug_dir / "browser_test.webm").read_bytes() == b"voice-bytes"
+
+
+def test_session_view_endpoint_rerenders_language_without_new_extraction(
+    client: TestClient,
+    experience_data_dir: Path,
+) -> None:
+    session_id = "session-view-endpoint"
+    SESSIONS[session_id] = ready_incident_state(
+        incident_type="collision",
+        vehicle_damage="rear bumper dent",
+        vehicle_damage_code="REAR_BUMPER_DENT",
+        vehicle_damage_raw_evidence="rear bumper damage",
+        third_party_involved=True,
+    )
+
+    response = client.post(
+        "/api/session/view",
+        json={"session_id": session_id, "language": "hi-IN"},
+    )
+
+    payload = response.json()
+    assert response.status_code == 200
+    items = captured_summary_items(payload)
+    assert items["घटना का प्रकार"] == "वाहन टक्कर"
+    assert items["वाहन का नुकसान"] == "पिछले बम्पर पर डेंट"
+    assert SESSIONS[session_id]["vehicle_damage"] == "rear bumper dent"
 
 
 def test_session_reset_endpoint(client: TestClient) -> None:

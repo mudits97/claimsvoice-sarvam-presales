@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import re
 import logging
+import threading
+import time
 from inspect import Parameter, signature
 from copy import deepcopy
 from pathlib import Path
@@ -21,6 +23,7 @@ from app.sarvam import (
     SarvamExtractionError,
     SarvamResponseGenerationError,
     SarvamSpeechError,
+    deterministic_claim_extraction,
     extract_claim_information,
     generate_customer_response,
     normalize_claim_extraction,
@@ -38,6 +41,10 @@ DISABLE_LLM_RESPONSES_ENV = "CLAIMSVOICE_DISABLE_LLM_RESPONSES"
 
 SESSIONS: dict[str, ClaimState] = {}
 logger = logging.getLogger(__name__)
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return int((time.perf_counter() - started_at) * 1000)
 
 
 CUSTOMER_PROGRESS_LABELS = [
@@ -248,6 +255,62 @@ INCIDENT_TYPE_LABELS_HI = {
     "fire": "आग",
 }
 
+LOCATION_LABELS_HI = {
+    "andheri": "अंधेरी",
+    "dwarka": "द्वारका",
+    "janakpuri": "जनकपुरी",
+    "connaught place": "कनॉट प्लेस",
+    "koramangala": "कोरमंगला",
+    "t nagar": "टी नगर",
+    "nh48": "एनएच 48",
+    "mathura": "मथुरा",
+    "delhi": "दिल्ली",
+    "mumbai": "मुंबई",
+    "pune": "पुणे",
+    "hyderabad": "हैदराबाद",
+    "lucknow": "लखनऊ",
+    "bengaluru": "बेंगलुरु",
+    "chennai": "चेन्नई",
+    "jaipur": "जयपुर",
+    "ahmedabad": "अहमदाबाद",
+    "chandigarh": "चंडीगढ़",
+}
+
+VEHICLE_DAMAGE_DISPLAY = {
+    "BUMPER_DENT": {
+        "en": "Bumper dent",
+        "hi": "बम्पर पर डेंट",
+    },
+    "REAR_BUMPER_DENT": {
+        "en": "Rear bumper dent",
+        "hi": "पिछले बम्पर पर डेंट",
+    },
+    "HEADLIGHT_DAMAGE": {
+        "en": "Headlight damage",
+        "hi": "हेडलाइट क्षतिग्रस्त",
+    },
+    "DOOR_DAMAGE": {
+        "en": "Door damage",
+        "hi": "दरवाजे का नुकसान",
+    },
+    "TYRE_DAMAGE": {
+        "en": "Tyre damage",
+        "hi": "एक टायर क्षतिग्रस्त",
+    },
+    "SIDE_MIRROR_DAMAGE": {
+        "en": "Side mirror damage",
+        "hi": "साइड मिरर क्षतिग्रस्त",
+    },
+    "WINDSHIELD_DAMAGE": {
+        "en": "Windshield damage",
+        "hi": "विंडशील्ड क्षतिग्रस्त",
+    },
+    "NO_MAJOR_DAMAGE_REPORTED": {
+        "en": "No major damage reported",
+        "hi": "कोई बड़ा नुकसान नहीं बताया गया",
+    },
+}
+
 
 def new_session_id() -> str:
     return uuid4().hex
@@ -303,6 +366,10 @@ def _response_language_from_state(state: ClaimState) -> str:
     )
 
 
+def _summary_language_from_state(state: ClaimState) -> str:
+    return _normalize_language_style(state.get("ui_language")) or _response_language_from_state(state)
+
+
 def _localized_template(state: ClaimState, key: str, **kwargs: Any) -> str:
     language = _response_language_from_state(state)
     template = RESPONSE_TEMPLATES[key][language]
@@ -338,6 +405,79 @@ def _identity_words(value: str | None) -> list[str]:
     return [word for word in WORD_PATTERN.findall((value or "").lower()) if len(word) > 1]
 
 
+def _clean_claimed_name(value: str) -> str:
+    words = [
+        word
+        for word in WORD_PATTERN.findall(value.lower())
+        if word
+        not in {
+            "yes",
+            "yeah",
+            "yep",
+            "no",
+            "nope",
+            "mr",
+            "mrs",
+            "ms",
+            "miss",
+            "ji",
+            "only",
+            "here",
+            "speaking",
+            "this",
+            "is",
+            "am",
+            "i",
+            "im",
+        }
+    ]
+    return " ".join(word.capitalize() for word in words[:3])
+
+
+def speaker_claimed_name_from_text(customer_text: str) -> str:
+    text = customer_text.strip().lower()
+    if not text:
+        return ""
+
+    patterns = (
+        r"\b(?:you are|you're)\s+(?:speaking|talking)\s+with\s+([a-z]+(?:\s+[a-z]+){0,2})\b",
+        r"\b(?:i am|i'm|im|this is|my name is)\s+([a-z]+(?:\s+[a-z]+){0,2})\b",
+        r"\b(?:main|mein)\s+([a-z]+(?:\s+[a-z]+){0,2})\s+(?:hoon|hu|hun)\b",
+        r"\b([a-z]+(?:\s+[a-z]+){0,2})\s+speaking\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return _clean_claimed_name(match.group(1))
+
+    if re.search(r"\b(?:no|nope|not|nahi|nahin)\b", text) or "नहीं" in customer_text:
+        name_match = re.search(r"\b([a-z]+)\s+kumar\b", text)
+        if name_match:
+            return _clean_claimed_name(name_match.group(0))
+    return ""
+
+
+def _claimed_name_matches_expected(claimed_name: str, expected_customer_name: str | None) -> bool:
+    claimed_words = _identity_words(claimed_name)
+    expected_words = _identity_words(expected_customer_name)
+    if not claimed_words or not expected_words:
+        return False
+    expected_first_name = expected_words[0]
+    if claimed_words[0] != expected_first_name:
+        return False
+    return all(word in expected_words for word in claimed_words)
+
+
+def _mentions_expected_as_other_person(text: str, expected_first_name: str) -> bool:
+    if not expected_first_name:
+        return False
+    other_person_patterns = (
+        rf"\b(?:father|mother|brother|sister|friend|owner)\s+{re.escape(expected_first_name)}\b",
+        rf"\b{re.escape(expected_first_name)}\s+(?:owns|owner|is\s+my\s+father|is\s+my\s+mother)\b",
+    )
+    return any(re.search(pattern, text) for pattern in other_person_patterns)
+
+
 def identity_confirmation_from_text(
     customer_text: str,
     expected_customer_name: str | None = None,
@@ -348,12 +488,15 @@ def identity_confirmation_from_text(
 
     expected_words = _identity_words(expected_customer_name)
     expected_first_name = expected_words[0] if expected_words else ""
+    claimed_name = speaker_claimed_name_from_text(customer_text)
+    if claimed_name:
+        return _claimed_name_matches_expected(claimed_name, expected_customer_name)
 
     negative_terms = (
         "no",
         "nope",
         "not me",
-        "not rajesh",
+        f"not {expected_first_name}" if expected_first_name else "not registered customer",
         "wrong",
         "incorrect",
         "nahi",
@@ -379,7 +522,6 @@ def identity_confirmation_from_text(
         "it is me",
         "it's me",
         "its me",
-        "speaking",
         "haan",
         "han",
         "ha",
@@ -392,12 +534,12 @@ def identity_confirmation_from_text(
         "ठीक",
     )
     tokens = set(WORD_PATTERN.findall(text))
-    if expected_first_name and expected_first_name in tokens:
-        return True
+    if _mentions_expected_as_other_person(text, expected_first_name):
+        return False
     if expected_words and any(
         re.search(rf"\b{re.escape(word)}\b", text)
         for word in expected_words
-    ) and any(term in text for term in ("i am", "i'm", "main", "mein", "speaking")):
+    ) and any(term in text for term in ("i am", "i'm", "this is", "main", "mein", "speaking")):
         return True
     if expected_first_name and "kumar" in tokens and expected_first_name not in tokens:
         return False
@@ -549,13 +691,16 @@ def _remember_language(
     customer_text: str,
     requested_language: str | None,
 ) -> ClaimState:
+    requested = _language_style_from_code(requested_language)
+    if requested:
+        state["ui_language"] = requested
     language = detect_conversation_language(
         customer_text,
         previous_language=state.get("response_language") or state.get("conversation_language"),
         requested_language=requested_language,
     )
     state["conversation_language"] = language
-    state["response_language"] = language
+    state["response_language"] = requested or language
     return state
 
 
@@ -565,10 +710,66 @@ def _tts_language_code(response_language: str, requested_language: str) -> str:
     return "hi-IN"
 
 
+def _queue_tts_generation(
+    *,
+    response_text: str,
+    language_code: str,
+    speech_synthesizer,
+    latency_trace: dict[str, Any],
+) -> str:
+    filename = f"claimsvoice-{uuid4().hex}.mp3"
+    audio_url = f"/media/audio/{filename}"
+
+    def worker() -> None:
+        started_at = time.perf_counter()
+        logger.warning("VOICE TURN LATENCY T10 Bulbul TTS started audio_url=%s", audio_url)
+        try:
+            speech_synthesizer(
+                response_text,
+                output_dir=GENERATED_AUDIO_DIR,
+                language_code=language_code,
+                filename=filename,
+            )
+            duration_ms = _elapsed_ms(started_at)
+            logger.warning(
+                "VOICE TURN LATENCY T11 first playable audio available audio_url=%s bulbul_tts_ms=%s",
+                audio_url,
+                duration_ms,
+            )
+        except Exception as exc:
+            logger.warning(
+                "VOICE TURN LATENCY Bulbul TTS failed audio_url=%s error=%s",
+                audio_url,
+                type(exc).__name__,
+            )
+
+    queued_at = time.perf_counter()
+    threading.Thread(target=worker, daemon=True).start()
+    latency_trace["bulbul_tts_status"] = "queued"
+    latency_trace["bulbul_tts_blocking"] = False
+    latency_trace["tts_queue_ms"] = _elapsed_ms(queued_at)
+    return audio_url
+
+
 def reset_session(session_id: str | None = None) -> str:
     if session_id:
         SESSIONS.pop(session_id, None)
     return new_session_id()
+
+
+def render_session_view(session_id: str, language: str = "hi-IN") -> dict[str, Any]:
+    state = deepcopy(SESSIONS.get(session_id) or build_initial_state())
+    requested = _language_style_from_code(language)
+    if requested:
+        state["ui_language"] = requested
+        state["response_language"] = requested
+    SESSIONS[session_id] = state
+    return _response_payload(
+        session_id=session_id,
+        transcript="",
+        state=state,
+        response_text=state.get("response_message", ""),
+    )
 
 
 def _get_session_state(session_id: str, mobile_number: str, customer_text: str) -> ClaimState:
@@ -583,7 +784,12 @@ def _get_session_state(session_id: str, mobile_number: str, customer_text: str) 
     return build_initial_state(mobile_number=mobile_number, raw_customer_input=customer_text)
 
 
-def _merge_extraction_into_state(state: ClaimState, extraction: ClaimExtraction) -> ClaimState:
+def _merge_extraction_into_state(
+    state: ClaimState,
+    extraction: ClaimExtraction,
+    *,
+    raw_extraction: ClaimExtraction | None = None,
+) -> ClaimState:
     merged = deepcopy(state)
     updates = state_updates_from_extraction(extraction)
     captured_fields: list[str] = []
@@ -594,6 +800,15 @@ def _merge_extraction_into_state(state: ClaimState, extraction: ClaimExtraction)
             if merged.get(key) != value:
                 captured_fields.append(key)
             merged[key] = value
+            if key == "vehicle_damage":
+                normalized_damage = str(value)
+                raw_damage = raw_extraction.vehicle_damage if raw_extraction else None
+                merged["vehicle_damage_code"] = _vehicle_damage_code_from_text(normalized_damage)
+                merged["vehicle_damage_raw_evidence"] = _vehicle_damage_raw_evidence(
+                    customer_text=state.get("raw_customer_input", ""),
+                    normalized_value=normalized_damage,
+                    raw_value=raw_damage,
+                )
     merged["last_captured_fields"] = captured_fields
     return merged
 
@@ -625,6 +840,14 @@ def _llm_response_disabled(response_generator) -> bool:
     )
 
 
+def _requires_deterministic_response(state: ClaimState) -> bool:
+    status = state.get("workflow_status", "")
+    return (
+        (status == "CUSTOMER_IDENTIFIED" and state.get("identity_confirmed") is not True)
+        or status in {"IDENTITY_MISMATCH", "CUSTOMER_NOT_FOUND", "POLICY_NOT_FOUND"}
+    )
+
+
 def _customer_response_with_dynamic_fallback(
     *,
     customer_text: str,
@@ -634,6 +857,8 @@ def _customer_response_with_dynamic_fallback(
     response_generator,
 ) -> str:
     fallback_response = _customer_response_from_state(state)
+    if _requires_deterministic_response(state):
+        return fallback_response
     if response_generator is None or _llm_response_disabled(response_generator):
         return fallback_response
 
@@ -796,6 +1021,99 @@ def _display_value(value: Any, language: str) -> str:
     return str(value)
 
 
+def _sentence_case(value: str) -> str:
+    cleaned = value.replace("_", " ").strip()
+    if not cleaned:
+        return ""
+    return cleaned[:1].upper() + cleaned[1:]
+
+
+def _vehicle_damage_code_from_text(value: str | None) -> str:
+    if not value:
+        return ""
+    raw_value = value.strip()
+    text = raw_value.lower()
+    if not text:
+        return ""
+    if any(term in text for term in ("tyre", "tire", "puncture")) or any(
+        term in raw_value for term in ("टायर", "पंक्चर")
+    ):
+        return "TYRE_DAMAGE"
+    if "bumper" in text or "बम्पर" in raw_value or "बंपर" in raw_value:
+        if "rear" in text or "पीछे" in raw_value or "पिछ" in raw_value:
+            return "REAR_BUMPER_DENT"
+        return "BUMPER_DENT"
+    if "headlight" in text or "headlamp" in text or "हेडलाइट" in raw_value:
+        return "HEADLIGHT_DAMAGE"
+    if "door" in text or "दरवाज" in raw_value:
+        return "DOOR_DAMAGE"
+    if "mirror" in text or "शीशा" in raw_value:
+        return "SIDE_MIRROR_DAMAGE"
+    if any(term in text for term in ("windshield", "windscreen")) or any(
+        term in raw_value for term in ("कांच", "विंडशील्ड")
+    ):
+        return "WINDSHIELD_DAMAGE"
+    if "no major damage" in text or "ज्यादा नुकसान नहीं" in raw_value:
+        return "NO_MAJOR_DAMAGE_REPORTED"
+    return ""
+
+
+def _vehicle_damage_raw_evidence(
+    *,
+    customer_text: str,
+    normalized_value: str,
+    raw_value: str | None,
+) -> str:
+    if raw_value and raw_value.strip():
+        return raw_value.strip()
+    code = _vehicle_damage_code_from_text(normalized_value)
+    if DEVANAGARI_PATTERN.search(customer_text) and code in VEHICLE_DAMAGE_DISPLAY:
+        return VEHICLE_DAMAGE_DISPLAY[code]["hi"]
+    return normalized_value
+
+
+def _vehicle_damage_display(state: ClaimState, language: str) -> str:
+    normalized_value = state.get("vehicle_damage") or ""
+    raw_evidence = state.get("vehicle_damage_raw_evidence") or ""
+    code = (
+        state.get("vehicle_damage_code")
+        or _vehicle_damage_code_from_text(normalized_value)
+        or _vehicle_damage_code_from_text(raw_evidence)
+    )
+
+    if language == "hi":
+        if raw_evidence and DEVANAGARI_PATTERN.search(raw_evidence):
+            return raw_evidence
+        if code in VEHICLE_DAMAGE_DISPLAY:
+            return VEHICLE_DAMAGE_DISPLAY[code]["hi"]
+        return _display_value(raw_evidence or normalized_value, language)
+
+    if code in VEHICLE_DAMAGE_DISPLAY:
+        return VEHICLE_DAMAGE_DISPLAY[code]["en"]
+    return _sentence_case(str(normalized_value or raw_evidence))
+
+
+def _incident_location_display(value: str | None, language: str) -> str:
+    if not value:
+        return _display_value(value, language)
+    location = value.strip()
+    lower_location = location.lower()
+    if language == "hi":
+        if "office" in lower_location and ("बाहर" in location or "bahar" in lower_location):
+            return "ऑफिस के बाहर"
+        if "school" in lower_location and ("बाहर" in location or "bahar" in lower_location):
+            return "स्कूल के बाहर"
+        if lower_location in LOCATION_LABELS_HI:
+            return LOCATION_LABELS_HI[lower_location]
+        return location
+
+    if "office" in lower_location and ("बाहर" in location or "bahar" in lower_location):
+        return "Outside the office"
+    if "school" in lower_location and ("बाहर" in location or "bahar" in lower_location):
+        return "Outside school"
+    return location
+
+
 def _incident_type_display(value: str | None, language: str) -> str:
     if not value:
         return _display_value(value, language)
@@ -897,6 +1215,9 @@ def _known_value(value: Any) -> bool:
 
 
 def _captured_summary_items(state: ClaimState, language: str) -> list[dict[str, str]]:
+    if state.get("identity_mismatch"):
+        return []
+
     labels = _summary_labels(language)
     items: list[dict[str, str]] = []
 
@@ -914,7 +1235,12 @@ def _captured_summary_items(state: ClaimState, language: str) -> list[dict[str, 
     if _known_value(state.get("incident_time")):
         items.append({"label": labels["time"], "value": str(state["incident_time"])})
     if _known_value(state.get("incident_location")):
-        items.append({"label": labels["location"], "value": str(state["incident_location"])})
+        items.append(
+            {
+                "label": labels["location"],
+                "value": _incident_location_display(state.get("incident_location"), language),
+            }
+        )
     if _known_value(state.get("incident_type")):
         items.append(
             {
@@ -923,7 +1249,7 @@ def _captured_summary_items(state: ClaimState, language: str) -> list[dict[str, 
             }
         )
     if _known_value(state.get("vehicle_damage")):
-        items.append({"label": labels["damage"], "value": str(state["vehicle_damage"])})
+        items.append({"label": labels["damage"], "value": _vehicle_damage_display(state, language)})
     if state.get("third_party_involved") is not None:
         items.append(
             {
@@ -938,8 +1264,35 @@ def _captured_summary_items(state: ClaimState, language: str) -> list[dict[str, 
     return items
 
 
+def _identity_mismatch_summary(state: ClaimState, language: str) -> dict[str, Any]:
+    if language == "hi":
+        return {
+            "type": "identity_verification",
+            "title": "पहचान सत्यापन आवश्यक",
+            "items": [
+                {
+                    "label": "स्थिति",
+                    "value": "ग्राहक पहचान सत्यापित नहीं हुई",
+                }
+            ],
+        }
+    return {
+        "type": "identity_verification",
+        "title": "Identity verification required",
+        "items": [
+            {
+                "label": "Status",
+                "value": "Customer identity could not be verified",
+            }
+        ],
+    }
+
+
 def _captured_summary(state: ClaimState) -> dict[str, Any] | None:
-    language = _response_language_from_state(state)
+    language = _summary_language_from_state(state)
+    if state.get("identity_mismatch"):
+        return _identity_mismatch_summary(state, language)
+
     labels = _summary_labels(language)
     items = _captured_summary_items(state, language)
     if not items:
@@ -1023,7 +1376,7 @@ def _summary_next_steps(state: ClaimState, language: str) -> list[dict[str, str]
 
 
 def _claim_summary(state: ClaimState) -> dict[str, Any] | None:
-    language = _response_language_from_state(state)
+    language = _summary_language_from_state(state)
     labels = _summary_labels(language)
     is_success = state.get("claim_status") == "INITIATED"
     workflow_status = state.get("workflow_status")
@@ -1102,6 +1455,8 @@ def _response_payload(
     response_text: str,
     audio_url: str | None = None,
     audio_error: str | None = None,
+    audio_pending: bool = False,
+    latency_trace: dict[str, Any] | None = None,
     success: bool = True,
     error_type: str | None = None,
     error_message: str | None = None,
@@ -1114,9 +1469,15 @@ def _response_payload(
         "transcript": transcript,
         "response_text": response_text,
         "audio_url": audio_url,
-        "audio_available": bool(audio_url),
+        "audio_available": bool(audio_url) and not audio_pending,
+        "audio_pending": audio_pending,
         "audio_error": audio_error,
+        "ui_language": state.get("ui_language", ""),
+        "conversation_language": state.get("conversation_language", ""),
         "response_language": state.get("response_language", ""),
+        "stt_language": state.get("stt_language", ""),
+        "tts_language": state.get("tts_language", ""),
+        "latency_trace": latency_trace or {},
         "claim_status": state.get("claim_status") or state.get("workflow_status", ""),
         "claim_id": state.get("claim_id", ""),
         "progress": _progress_from_state(state),
@@ -1146,7 +1507,10 @@ def _run_text_pipeline(
     requested_language: str = "hi-IN",
     extractor=extract_claim_information,
     response_generator=generate_customer_response,
+    latency_trace: dict[str, Any] | None = None,
 ) -> tuple[ClaimState, str]:
+    trace = latency_trace if latency_trace is not None else {}
+    trace["transcript_processing_started"] = True
     state = _get_session_state(session_id, mobile_number, customer_text)
     state = _remember_language(
         state,
@@ -1158,9 +1522,13 @@ def _run_text_pipeline(
         response_text = _customer_response_from_state(state)
         state["response_message"] = response_text
         SESSIONS[session_id] = state
+        trace["workflow_ms"] = 0
+        trace["response_generation_ms"] = 0
+        trace["response_text_finalized_ms"] = 0
         return state, response_text
 
     if state.get("customer_id") and state.get("identity_confirmed") is not True:
+        claimed_name = speaker_claimed_name_from_text(customer_text)
         confirmation = identity_confirmation_from_text(
             customer_text,
             state.get("customer_name"),
@@ -1169,21 +1537,22 @@ def _run_text_pipeline(
             state_before = deepcopy(state)
             state.update(
                 {
-                    "customer_id": "",
-                    "customer_name": "",
-                    "policy_id": "",
                     "policy_status": "",
                     "policy_type": "",
                     "vehicle_name": "",
                     "vehicle_registration": "",
                     "identity_confirmed": False,
                     "identity_mismatch": True,
+                    "speaker_claimed_name": claimed_name,
                     "workflow_status": "IDENTITY_MISMATCH",
                     "next_action": "MANUAL_IDENTITY_VERIFICATION",
                 }
             )
             response_text = _customer_response_from_state(state)
             state = _finalize_response_state(state, response_text)
+            trace["workflow_ms"] = 0
+            trace["response_generation_ms"] = 0
+            trace["response_text_finalized_ms"] = 0
             _debug_state_trace(
                 session_id=session_id,
                 customer_text=customer_text,
@@ -1197,12 +1566,17 @@ def _run_text_pipeline(
         if confirmation is True:
             state["identity_confirmed"] = True
             state["identity_just_confirmed"] = True
+            state["speaker_claimed_name"] = claimed_name or state.get("customer_name", "")
         else:
             state_before = deepcopy(state)
+            state["speaker_claimed_name"] = claimed_name
             state["workflow_status"] = "CUSTOMER_IDENTIFIED"
             state["identity_confirmation_requested"] = True
             response_text = _customer_response_from_state(state)
             state = _finalize_response_state(state, response_text)
+            trace["workflow_ms"] = 0
+            trace["response_generation_ms"] = 0
+            trace["response_text_finalized_ms"] = 0
             _debug_state_trace(
                 session_id=session_id,
                 customer_text=customer_text,
@@ -1216,18 +1590,38 @@ def _run_text_pipeline(
 
     state_before = deepcopy(state)
     last_requested_field = state.get("last_requested_field") or state.get("next_missing_field", "")
-    raw_extraction = _extract_with_field_context(
-        extractor,
-        customer_text,
-        last_requested_field,
-    )
+    extraction_started_at = time.perf_counter()
+    try:
+        raw_extraction = _extract_with_field_context(
+            extractor,
+            customer_text,
+            last_requested_field,
+        )
+    except SarvamExtractionError as exc:
+        logger.warning(
+            "Sarvam extraction unavailable; using deterministic extraction fallback. error=%s",
+            type(exc).__name__,
+        )
+        trace["sarvam_extraction_fallback"] = True
+        raw_extraction = deterministic_claim_extraction(
+            customer_text,
+            last_requested_field=last_requested_field,
+        )
+    trace["sarvam_reasoning_ms"] = _elapsed_ms(extraction_started_at)
+    normalization_started_at = time.perf_counter()
     extraction = normalize_claim_extraction(
         customer_text,
         raw_extraction,
         last_requested_field=last_requested_field,
     )
-    state = _merge_extraction_into_state(state, extraction)
+    trace["normalization_ms"] = _elapsed_ms(normalization_started_at)
+    merge_started_at = time.perf_counter()
+    state = _merge_extraction_into_state(state, extraction, raw_extraction=raw_extraction)
+    trace["state_merge_ms"] = _elapsed_ms(merge_started_at)
+    workflow_started_at = time.perf_counter()
     result = run_claim_workflow(state)
+    trace["workflow_ms"] = _elapsed_ms(workflow_started_at)
+    response_started_at = time.perf_counter()
     response_text = _customer_response_with_dynamic_fallback(
         customer_text=customer_text,
         state=result,
@@ -1235,7 +1629,10 @@ def _run_text_pipeline(
         normalized_extraction=extraction,
         response_generator=response_generator,
     )
+    trace["response_generation_ms"] = _elapsed_ms(response_started_at)
+    finalize_started_at = time.perf_counter()
     result = _finalize_response_state(result, response_text)
+    trace["response_text_finalized_ms"] = _elapsed_ms(finalize_started_at)
     _debug_state_trace(
         session_id=session_id,
         customer_text=customer_text,
@@ -1259,8 +1656,13 @@ def process_chat_message(
     extractor=extract_claim_information,
     response_generator=generate_customer_response,
     speech_synthesizer=synthesize_speech_to_file,
+    latency_trace: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     active_session_id = session_id or new_session_id()
+    latency_trace = latency_trace if latency_trace is not None else {}
+    latency_trace.setdefault("turn_type", "text")
+    latency_trace["tts_non_blocking"] = speech_synthesizer is synthesize_speech_to_file
+    turn_started_at = time.perf_counter()
     try:
         state, response_text = _run_text_pipeline(
             session_id=active_session_id,
@@ -1269,6 +1671,7 @@ def process_chat_message(
             requested_language=language,
             extractor=extractor,
             response_generator=response_generator,
+            latency_trace=latency_trace,
         )
     except (SarvamConfigurationError, SarvamExtractionError):
         fallback_state = _get_session_state(active_session_id, mobile_number, message)
@@ -1282,23 +1685,44 @@ def process_chat_message(
             transcript=message,
             state=fallback_state,
             response_text=_localized_template(fallback_state, "generic_error"),
+            latency_trace=latency_trace,
         )
 
     audio_url = None
     audio_error = None
+    audio_pending = False
+    tts_language = _tts_language_code(
+        _response_language_from_state(state),
+        language,
+    )
+    state["tts_language"] = tts_language
+    if active_session_id in SESSIONS:
+        SESSIONS[active_session_id]["tts_language"] = tts_language
     try:
-        audio = speech_synthesizer(
-            response_text,
-            output_dir=GENERATED_AUDIO_DIR,
-            language_code=_tts_language_code(
-                _response_language_from_state(state),
-                language,
-            ),
-        )
-        audio_url = audio.audio_url
+        if speech_synthesizer is synthesize_speech_to_file:
+            audio_url = _queue_tts_generation(
+                response_text=response_text,
+                language_code=tts_language,
+                speech_synthesizer=speech_synthesizer,
+                latency_trace=latency_trace,
+            )
+            audio_pending = True
+        else:
+            tts_started_at = time.perf_counter()
+            audio = speech_synthesizer(
+                response_text,
+                output_dir=GENERATED_AUDIO_DIR,
+                language_code=tts_language,
+            )
+            latency_trace["bulbul_tts_ms"] = _elapsed_ms(tts_started_at)
+            latency_trace["bulbul_tts_blocking"] = True
+            audio_url = audio.audio_url
     except (SarvamConfigurationError, SarvamSpeechError, Exception):
         audio_error = "Audio response is unavailable, but you can continue with the text response."
+        latency_trace["bulbul_tts_status"] = "failed"
 
+    latency_trace["backend_text_response_total_ms"] = _elapsed_ms(turn_started_at)
+    logger.warning("VOICE TURN LATENCY text/chat trace=%s", latency_trace)
     return _response_payload(
         session_id=active_session_id,
         transcript=message,
@@ -1306,6 +1730,8 @@ def process_chat_message(
         response_text=response_text,
         audio_url=audio_url,
         audio_error=audio_error,
+        audio_pending=audio_pending,
+        latency_trace=latency_trace,
     )
 
 
@@ -1323,11 +1749,23 @@ def process_voice_message(
     speech_synthesizer=synthesize_speech_to_file,
 ) -> dict[str, Any]:
     active_session_id = session_id or new_session_id()
+    latency_trace: dict[str, Any] = {
+        "turn_type": "voice",
+        "backend_audio_received": True,
+    }
+    voice_started_at = time.perf_counter()
     try:
+        stt_started_at = time.perf_counter()
+        logger.warning("VOICE TURN LATENCY T2 Saaras STT request started")
         transcription = transcriber(
             audio_bytes,
             filename=filename,
             content_type=content_type,
+        )
+        latency_trace["saaras_stt_ms"] = _elapsed_ms(stt_started_at)
+        logger.warning(
+            "VOICE TURN LATENCY T3 Saaras STT completed saaras_stt_ms=%s",
+            latency_trace["saaras_stt_ms"],
         )
     except (SarvamConfigurationError, SarvamSpeechError) as error:
         state = _get_session_state(active_session_id, mobile_number, "")
@@ -1345,8 +1783,12 @@ def process_voice_message(
             success=False,
             error_type=error_type,
             error_message=error_type,
+            latency_trace=latency_trace,
         )
 
+    latency_trace["transcript_length"] = len(transcription.transcript)
+    latency_trace["stt_language"] = transcription.language_code or ""
+    logger.warning("VOICE TURN LATENCY T4 transcript processing started")
     payload = process_chat_message(
         message=transcription.transcript,
         mobile_number=mobile_number,
@@ -1355,9 +1797,15 @@ def process_voice_message(
         extractor=extractor,
         response_generator=response_generator,
         speech_synthesizer=speech_synthesizer,
+        latency_trace=latency_trace,
     )
+    if active_session_id in SESSIONS:
+        SESSIONS[active_session_id]["stt_language"] = transcription.language_code or ""
+    payload["stt_language"] = transcription.language_code or ""
     payload["transcript"] = transcription.transcript
     payload["detected_language"] = transcription.language_code
+    payload["latency_trace"]["voice_backend_total_ms"] = _elapsed_ms(voice_started_at)
+    logger.warning("VOICE TURN LATENCY total trace=%s", payload["latency_trace"])
     return payload
 
 

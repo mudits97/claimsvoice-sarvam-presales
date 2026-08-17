@@ -436,6 +436,7 @@ def state_updates_from_extraction(extraction: ClaimExtraction) -> ClaimState:
         "third_party_involved": extraction.third_party_involved,
         "injury_reported": extraction.injury_reported,
         "vehicle_drivable": extraction.vehicle_drivable,
+        "additional_details": extraction.additional_details,
     }
 
 

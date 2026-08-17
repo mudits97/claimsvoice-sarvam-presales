@@ -18,11 +18,14 @@ class ClaimState(TypedDict, total=False):
     identity_confirmation_requested: bool
     identity_mismatch: bool
     identity_just_confirmed: bool
+    speaker_claimed_name: str
     incident_date: str | None
     incident_time: str | None
     incident_location: str | None
     incident_type: str | None
     vehicle_damage: str | None
+    vehicle_damage_code: str
+    vehicle_damage_raw_evidence: str | None
     third_party_involved: bool | None
     injury_reported: bool | None
     vehicle_drivable: bool | None
@@ -38,7 +41,10 @@ class ClaimState(TypedDict, total=False):
     escalation_required: bool
     escalation_reason: str
     conversation_language: str
+    stt_language: str
     response_language: str
+    tts_language: str
+    ui_language: str
     last_captured_fields: list[str]
     conversation_messages: list[str]
     raw_customer_input: str
@@ -79,11 +85,14 @@ def build_initial_state(
         "identity_confirmation_requested": False,
         "identity_mismatch": False,
         "identity_just_confirmed": False,
+        "speaker_claimed_name": "",
         "incident_date": incident_date,
         "incident_time": incident_time,
         "incident_location": incident_location,
         "incident_type": incident_type,
         "vehicle_damage": vehicle_damage,
+        "vehicle_damage_code": "",
+        "vehicle_damage_raw_evidence": None,
         "third_party_involved": third_party_involved,
         "injury_reported": injury_reported,
         "vehicle_drivable": vehicle_drivable,
@@ -99,7 +108,10 @@ def build_initial_state(
         "escalation_required": False,
         "escalation_reason": "",
         "conversation_language": "",
+        "stt_language": "",
         "response_language": "",
+        "tts_language": "",
+        "ui_language": "",
         "last_captured_fields": [],
         "conversation_messages": [],
         "raw_customer_input": raw_customer_input,
