@@ -10,7 +10,9 @@ The project is intentionally built as an MVP. It uses fictional local customer, 
 
 ## Demo
 
-ClaimsVoice currently runs as a local Proof of Concept. Follow the Setup Instructions below to run the application locally.
+A short walkthrough of the ClaimsVoice PoC, demonstrating the multilingual conversational Motor FNOL journey powered by Sarvam AI.
+
+**Demo Video:** https://www.loom.com/share/0ccfe99db69b4f5990201c307e2c2ff5
 
 ## 2. Key Capabilities
 
