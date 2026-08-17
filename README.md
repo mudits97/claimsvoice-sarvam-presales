@@ -22,11 +22,13 @@ ClaimsVoice currently runs as a local Proof of Concept. Follow the Setup Instruc
 - Guided incident information collection for date, time, location, incident type, damage, third-party involvement, injury status, and driveability.
 - Missing-information handling that asks for only the next required detail.
 - Deterministic eligibility rules for active policy, covered incident type, complete information, and injury/high-risk escalation.
+- Deterministic extraction safety net for common Hindi/Hinglish and English claim facts when the live model extraction is unavailable or inconsistent.
 - Claim creation into the local JSON-backed mock claim store.
 - Document requirement generation based on the persisted claim details.
 - Human review flow for injury or high-risk scenarios.
-- Live captured-information summary and final claim/review summary in the UI.
+- Live captured-information summary and final claim/review summary in the UI, with localized display values that do not mutate persisted claim facts.
 - Sarvam-105B dynamic response phrasing for acknowledgements, clarifications, and next-step questions, constrained by deterministic workflow state.
+- Deterministic identity confirmation and security-sensitive response wording before any policy details are shown.
 - Bulbul-generated audio playback for assistant responses when Sarvam TTS succeeds.
 - Structured voice diagnostics for browser recording, no-speech, and Saaras transcription failures.
 
@@ -40,7 +42,7 @@ The current implementation uses the Sarvam Python SDK through `app/sarvam.py`.
 | Language Model | `sarvam-105b` | Extracts structured FNOL claim information from customer text using a strict JSON schema, then generates concise customer-facing response phrasing from a constrained workflow context. |
 | Text-to-Speech | `bulbul:v3` | Converts the exact assistant response shown in the UI into MP3 audio for browser playback. |
 
-Important implementation note: Sarvam-105B is used for two separate tasks. First, it extracts structured claim facts. Second, after LangGraph and deterministic rules decide the allowed workflow action, it phrases the customer-facing reply using the latest customer message, current ClaimState, extracted facts, missing information, and deterministic fallback response. The LLM does not decide policy validity, coverage, claim creation, or escalation. Deterministic response templates remain available as a fallback if dynamic response generation is unavailable.
+Important implementation note: Sarvam-105B is used for two separate tasks. First, it extracts structured claim facts. Second, after LangGraph and deterministic rules decide the allowed workflow action, it phrases the customer-facing reply using the latest customer message, current ClaimState, extracted facts, missing information, and deterministic fallback response. The LLM does not decide policy validity, coverage, claim creation, or escalation. Deterministic extraction is used as a safety net for obvious claim facts if live extraction is unavailable or inconsistent. Deterministic response templates remain available as a fallback if dynamic response generation is unavailable, and identity/security checkpoint messages are kept deterministic.
 
 The Sarvam SDK client is created with an internal HTTPX client that does not trust inherited proxy environment variables. This keeps local demo calls from failing when the shell has stale or broken proxy settings.
 
@@ -64,7 +66,7 @@ FastAPI Backend:
 - Exposes REST endpoints for chat, voice processing, session reset, claim lookup, mock customer lookup, policy lookup, coverage checks, claim creation, document requirements, and escalation.
 - Receives browser audio, saves one local debug recording, and passes audio to Saaras v3 with a normalized upload media type.
 - Keeps conversation sessions in memory for the local demo.
-- Calls Sarvam-105B for structured extraction and constrained dynamic response phrasing, with deterministic fallback text if response generation fails.
+- Calls Sarvam-105B for structured extraction and constrained dynamic response phrasing, with deterministic extraction fallback for obvious claim facts and deterministic fallback text if response generation fails.
 - Returns structured customer-facing response data, including voice success/failure status, summaries, progress, and optional Bulbul audio URL.
 
 LangGraph Claims Workflow:
@@ -108,13 +110,13 @@ Voice flow:
 
 1. Customer opens the browser UI and enters a registered mock mobile number.
 2. Customer presses the microphone button and speaks in Hindi/Hinglish or English.
-3. Browser records audio and sends it to `POST /api/voice/process`.
-4. Saaras v3 transcribes the audio.
-5. The transcript is passed into the same message-processing flow used by typed chat.
-6. Sarvam-105B extracts structured claim details.
+3. Browser records audio and sends it to `POST /api/voice/transcribe`.
+4. Saaras v3 transcribes the audio and returns the transcript.
+5. The frontend displays the transcript, then sends it to `POST /api/chat`.
+6. Sarvam-105B extracts structured claim details, with deterministic extraction fallback for obvious claim facts if needed.
 7. LangGraph runs the claim workflow.
 8. The mock API layer looks up customer, policy, coverage, claim, documents, and escalation data.
-9. Sarvam-105B phrases the customer-facing response from the latest message, extracted facts, current ClaimState, missing fields, and allowed workflow action.
+9. Sarvam-105B phrases the customer-facing response from the latest message, extracted facts, current ClaimState, missing fields, and allowed workflow action, except for deterministic identity/security checkpoints.
 10. The UI updates the conversation, progress tracker, captured-information summary, and final claim/review summary.
 11. Bulbul v3 generates audio from the exact response text shown in the UI.
 12. The browser plays the assistant response and keeps a replay button available.
@@ -206,7 +208,8 @@ Key files:
 | `GET` | `/` | Serves the browser UI from `frontend/index.html`. |
 | `GET` | `/api/health` | Returns basic backend health status. |
 | `POST` | `/api/chat` | Processes a typed customer message and returns response text, summary data, claim status, and optional Bulbul audio URL. |
-| `POST` | `/api/voice/process` | Accepts browser-recorded audio, transcribes with Saaras v3, then runs the shared chat/claim flow. It returns structured voice success/failure fields and saves one local debug recording when audio reaches the backend. |
+| `POST` | `/api/voice/transcribe` | Current browser voice path. Accepts browser-recorded audio, transcribes with Saaras v3, and returns the transcript before the frontend sends it through `/api/chat`. |
+| `POST` | `/api/voice/process` | Legacy combined voice endpoint. Accepts browser-recorded audio, transcribes with Saaras v3, then runs the shared chat/claim flow. It returns structured voice success/failure fields and saves one local debug recording when audio reaches the backend. |
 | `POST` | `/api/session/reset` | Resets an in-memory browser conversation session. |
 | `GET` | `/api/claim/{claim_id}` | Looks up customer-facing claim details, required documents, and next action for a claim. |
 | `GET` | `/api/customer/{mobile_number}` | Looks up a mock customer by registered mobile number. |
@@ -373,7 +376,7 @@ Run the automated tests:
 py -B -m pytest
 ```
 
-Current local validation: `109 passed, 1 warning`.
+Current local validation: `151 passed, 1 warning`.
 
 The tests cover:
 
@@ -385,7 +388,10 @@ The tests cover:
 - Sarvam-105B structured extraction and constrained dynamic response-generation prompts.
 - Customer identification and personalization.
 - Captured-information summary and final claim/review summary.
+- Localized display values for structured claim summaries without mutating persisted claim facts.
 - Hindi/Hinglish and English response behavior.
+- Deterministic extraction fallback for common Hindi/Hinglish facts such as relative date, Hindi `बजे` time, and Hindi location names.
+- Deterministic identity-confirmation wording before policy details are shown.
 - Repeated-question prevention, ambiguity handling, and contradiction/correction handling for injury and vehicle driveability.
 - Saaras and Bulbul wrapper contracts using test doubles.
 - Browser UI static behavior, including microphone capture hooks and audio replay controls.
